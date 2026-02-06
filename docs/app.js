@@ -12,10 +12,16 @@ const state = {
 async function initWasm() {
   try {
     const { default: createNukeKernel } = await import('./wasm/nuke_kernel.js');
+    console.log('Creating WASM Kernel...');
     state.kernel = await createNukeKernel({
       locateFile: (path) => `./wasm/${path}`
     });
     
+    if (!state.kernel.cwrap) {
+      console.error('WASM Kernel loaded but cwrap is missing. Check EXPORTED_RUNTIME_METHODS.');
+      throw new Error('cwrap missing');
+    }
+
     // Bind WASM functions
     state.kernel.initStore = state.kernel.cwrap('nuke_wasm_init', 'number', []);
     state.kernel.loadData = state.kernel.cwrap('nuke_wasm_load_data', 'number', ['number', 'number']);
@@ -25,6 +31,10 @@ async function initWasm() {
     state.kernel.searchRoutes = state.kernel.cwrap('nuke_wasm_search_routes_json', 'string', ['string', 'string', 'number']);
     state.kernel.calcScore = state.kernel.cwrap('nuke_wasm_calc_score', 'number', ['number', 'number', 'number', 'number', 'number']);
     
+    if (typeof state.kernel.initStore !== 'function') {
+      throw new Error('initStore is not a function - symbol might be missing in WASM exports');
+    }
+
     state.kernel.initStore();
 
     // Load main routes/graph blob
@@ -33,14 +43,18 @@ async function initWasm() {
     const blobArrayBuffer = await response.arrayBuffer();
     const uint8Array = new Uint8Array(blobArrayBuffer);
     
-    const ptr = state.kernel._malloc(uint8Array.length);
-    state.kernel.HEAPU8.set(uint8Array, ptr);
-    state.kernel.loadData(ptr, uint8Array.length);
-    state.kernel._free(ptr);
+    if (state.kernel._malloc) {
+      const ptr = state.kernel._malloc(uint8Array.length);
+      state.kernel.HEAPU8.set(uint8Array, ptr);
+      state.kernel.loadData(ptr, uint8Array.length);
+      state.kernel._free(ptr);
+    } else {
+      console.warn('WASM _malloc not found, using alternative or data might not be loaded');
+    }
     
-    console.log('WASM Kernel initialized');
+    console.log('WASM Kernel initialized successfully');
   } catch (err) {
-    console.warn('WASM Kernel failed to load:', err);
+    console.error('WASM Kernel failed to load:', err);
     throw err;
   }
 }
