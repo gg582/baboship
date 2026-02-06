@@ -1,0 +1,9 @@
+build/
+dist/
+nukedb_app
+*.o
+*.js.map
+tmp_check_header
+tmp_checksum
+data/*.db-shm
+data/*.db-wal
