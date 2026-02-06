@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -13,192 +14,172 @@
 #define WASM_KEEPALIVE
 #endif
 
+#include "nuke_flight.h"
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
-#define EARTH_RADIUS_KM 6371.0
+// The global store for WASM
+static nuke_flight_store_t g_store;
+static bool g_initialized = false;
 
-static double degrees_to_radians(double degrees) {
-    return degrees * (M_PI / 180.0);
-}
+// We include the .c file here to simplify the WASM build without complex linking for now,
+// or we can rely on Makefile to link them. Let's rely on Makefile.
 
-static double clamp_lat(double lat) {
-    if (lat > 90.0) return 90.0;
-    if (lat < -90.0) return -90.0;
-    return lat;
-}
-
-static double normalize_lon(double lon) {
-    while (lon > 180.0) {
-        lon -= 360.0;
-    }
-    while (lon < -180.0) {
-        lon += 360.0;
-    }
-    return lon;
-}
-
-static double great_circle_distance(double lat1, double lon1, double lat2, double lon2) {
-    lat1 = clamp_lat(lat1);
-    lat2 = clamp_lat(lat2);
-    lon1 = normalize_lon(lon1);
-    lon2 = normalize_lon(lon2);
-
-    const double dlat = degrees_to_radians(lat2 - lat1);
-    const double dlon = degrees_to_radians(lon2 - lon1);
-    const double rad_lat1 = degrees_to_radians(lat1);
-    const double rad_lat2 = degrees_to_radians(lat2);
-
-    const double a = sin(dlat / 2.0) * sin(dlat / 2.0) +
-                     sin(dlon / 2.0) * sin(dlon / 2.0) * cos(rad_lat1) * cos(rad_lat2);
-    const double c = 2.0 * atan2(sqrt(a), sqrt(1.0 - a));
-    return EARTH_RADIUS_KM * c;
+WASM_KEEPALIVE
+int nuke_wasm_init(void) {
+    if (g_initialized) return 0;
+    int rc = nuke_flight_store_init(&g_store, NULL, NULL, 0);
+    if (rc == 0) g_initialized = true;
+    return rc;
 }
 
 WASM_KEEPALIVE
+int nuke_wasm_load_data(const void *blob, size_t size) {
+    if (!g_initialized) nuke_wasm_init();
+    // This function is defined in our modified nuke_flight.c
+    extern int nuke_store_load_from_blob(nuke_flight_store_t *store, const void *blob, size_t size);
+    return nuke_store_load_from_blob(&g_store, blob, size);
+}
+
+WASM_KEEPALIVE
+const char* nuke_wasm_get_airports_json(void) {
+    if (!g_initialized || g_store.airport_count == 0) return "{\"airports\":[]}";
+    
+    static char *buffer = NULL;
+    static size_t buffer_size = 0;
+    
+    size_t needed = 128 + g_store.airport_count * 128;
+    if (buffer_size < needed) {
+        buffer = realloc(buffer, needed);
+        buffer_size = needed;
+    }
+    
+    size_t offset = 0;
+    offset += sprintf(buffer + offset, "{\"total\":%zu,\"airports\":[", g_store.airport_count);
+    for (size_t i = 0; i < g_store.airport_count; ++i) {
+        offset += sprintf(buffer + offset, 
+            "%s{\"id\":%d,\"code\":\"%s\",\"lat\":%.4f,\"lon\":%.4f}",
+            (i == 0 ? "" : ","),
+            g_store.airport_ids[i],
+            g_store.airport_codes[i],
+            g_store.airport_lat[i],
+            g_store.airport_lon[i]
+        );
+    }
+    sprintf(buffer + offset, "]}");
+    return buffer;
+}
+
+WASM_KEEPALIVE
+const char* nuke_wasm_search_routes_json(const char *from, const char *to, int max_transfers) {
+    if (!g_initialized) return "{\"error\":\"Not initialized\"}";
+    
+    nuke_search_params_t params = {
+        .src_code = from,
+        .dst_code = to,
+        .max_transfers = max_transfers,
+        .max_results = 10
+    };
+    
+    nuke_path_buffer_t result_buffer;
+    nuke_path_buffer_init(&result_buffer, 10);
+    
+    int rc = nuke_search_routes(&g_store, &params, &result_buffer);
+    
+    static char *output = NULL;
+    static size_t output_size = 0;
+    size_t needed = 1024 + result_buffer.count * 1024;
+    if (output_size < needed) {
+        output = realloc(output, needed);
+        output_size = needed;
+    }
+    
+    if (rc != 0) {
+        sprintf(output, "{\"from\":\"%s\",\"to\":\"%s\",\"results\":0,\"paths\":[],\"error\":%d}", from, to, rc);
+        nuke_path_buffer_free(&result_buffer);
+        return output;
+    }
+    
+    size_t offset = 0;
+    offset += sprintf(output + offset, "{\"from\":\"%s\",\"to\":\"%s\",\"results\":%zu,\"paths\":[", 
+                     from, to, result_buffer.count);
+    
+    for (size_t i = 0; i < result_buffer.count; ++i) {
+        nuke_path_result_t *p = &result_buffer.items[i];
+        offset += sprintf(output + offset, "%s{\"hops\":%zu,\"legs\":%zu,\"totalDistanceKm\":%.2f,\"greatCircleKm\":%.2f,\"efficiency\":%.4f,\"airports\":[",
+                         (i == 0 ? "" : ","), p->hops, p->hops + 1, p->total_distance_km, p->great_circle_km, p->efficiency);
+        
+        for (size_t j = 0; j < p->airport_count; ++j) {
+            offset += sprintf(output + offset, "%s{\"id\":%d,\"code\":\"%s\"}",
+                             (j == 0 ? "" : ","), p->airport_ids[j], p->airport_codes[j]);
+        }
+        offset += sprintf(output + offset, "]}");
+    }
+    sprintf(output + offset, "]}");
+    
+    nuke_path_buffer_free(&result_buffer);
+    return output;
+}
+
+WASM_KEEPALIVE
+const char* nuke_wasm_get_health_json(void) {
+    static char buffer[256];
+    sprintf(buffer, "{\"airports_loaded\":%zu,\"routes_loaded\":%zu,\"nuke_online\":true,\"mode\":\"WASM-Serverless\"}",
+            g_store.airport_count, g_store.route_count);
+    return buffer;
+}
+
+// Keep some of the previous functions if they were useful
+WASM_KEEPALIVE
 double nuke_wasm_gc_distance(double lat1, double lon1, double lat2, double lon2) {
-    return great_circle_distance(lat1, lon1, lat2, lon2);
+    // Haversine formula
+    double dlat = (lat2 - lat1) * M_PI / 180.0;
+    double dlon = (lon2 - lon1) * M_PI / 180.0;
+    double a = sin(dlat / 2.0) * sin(dlat / 2.0) +
+               cos(lat1 * M_PI / 180.0) * cos(lat2 * M_PI / 180.0) *
+                   sin(dlon / 2.0) * sin(dlon / 2.0);
+    double c = 2.0 * atan2(sqrt(a), sqrt(1.0 - a));
+    return 6371.0 * c;
+}
+
+WASM_KEEPALIVE
+double nuke_wasm_calc_score(double lat1, double lon1, double lat2, double lon2, double reliability) {
+    double dist = nuke_wasm_gc_distance(lat1, lon1, lat2, lon2);
+    if (dist <= 0) return 0;
+    return (reliability / (dist + 1.0)) * 1000.0;
 }
 
 WASM_KEEPALIVE
 double nuke_wasm_route_distance(const double *coords, size_t point_count) {
-    if (!coords || point_count < 2) {
-        return 0.0;
-    }
+    if (!coords || point_count < 2) return 0.0;
     double total = 0.0;
     for (size_t i = 1; i < point_count; ++i) {
-        const size_t prev_idx = (i - 1) * 2;
-        const size_t curr_idx = i * 2;
-        const double lat1 = coords[prev_idx];
-        const double lon1 = coords[prev_idx + 1];
-        const double lat2 = coords[curr_idx];
-        const double lon2 = coords[curr_idx + 1];
-        total += great_circle_distance(lat1, lon1, lat2, lon2);
+        total += nuke_wasm_gc_distance(coords[(i-1)*2], coords[(i-1)*2+1], coords[i*2], coords[i*2+1]);
     }
     return total;
 }
 
 WASM_KEEPALIVE
 double nuke_wasm_efficiency(double gc_distance_km, double actual_distance_km) {
-    if (gc_distance_km <= 0.0 || actual_distance_km <= 0.0) {
-        return 0.0;
-    }
-    const double ratio = gc_distance_km / actual_distance_km;
-    return ratio * 100.0;
-}
-
-// nuke_calc: High-performance calculation for a single route leg
-// Takes lat1, lon1, lat2, lon2 and returns pre-processed logistics score
-WASM_KEEPALIVE
-double nuke_wasm_calc_score(double lat1, double lon1, double lat2, double lon2, double reliability) {
-    double dist = great_circle_distance(lat1, lon1, lat2, lon2);
-    if (dist <= 0) return 0;
-    
-    // Logic: score = (reliability / distance) * 1000
-    // Higher is better (more reliable per unit distance)
-    return (reliability / (dist + 1.0)) * 1000.0;
+    if (gc_distance_km <= 0.0 || actual_distance_km <= 0.0) return 0.0;
+    return (gc_distance_km / actual_distance_km) * 100.0;
 }
 
 WASM_KEEPALIVE
 int nuke_wasm_is_valid_iata(const char *code) {
-    if (!code) return 0;
-    for (size_t i = 0; i < 3; ++i) {
-        const unsigned char ch = (unsigned char)code[i];
-        if (!isalpha(ch)) {
-            return 0;
-        }
-        if (ch == '\0') {
-            return 0;
-        }
+    if (!code || strlen(code) != 3) return 0;
+    for (int i = 0; i < 3; i++) {
+        if (!isalpha((unsigned char)code[i])) return 0;
     }
-    return code[3] == '\0';
+    return 1;
 }
-
-typedef struct {
-    const char *continent_code;
-    const char *continent_label;
-    const char *country;
-    const char *iso_code;
-    const char *anchor_airport;
-    double avg_hours;
-    double reliability;
-    const char *notes;
-} logistics_best_node_t;
-
-static const logistics_best_node_t BEST_NODES[] = {
-    {"AS", "아시아", "대한민국", "KR", "ICN", 16.2, 98.1, "24시간 통관과 저온 물류 창고를 동시에 운영"},
-    {"EU", "유럽", "독일", "DE", "FRA", 15.7, 97.4, "프랑크푸르트 기반의 안정적인 인프라"},
-    {"NA", "북아메리카", "미국", "US", "CVG", 14.3, 96.9, "동서부를 동시에 커버하는 대형 허브"},
-    {"SA", "남아메리카", "칠레", "CL", "SCL", 18.5, 94.1, "안정적인 냉장 전력과 태평양 루트"},
-    {"AF", "아프리카", "모로코", "MA", "CMN", 17.6, 92.3, "대서양 관문과 유럽 연계성이 우수"},
-    {"OC", "오세아니아", "호주", "AU", "SYD", 19.2, 93.8, "복합 운송이 쉬운 시드니 권역"}
-};
 
 WASM_KEEPALIVE
 const char* nuke_wasm_get_best_nodes_json(void) {
-    static char buffer[4096];
-    size_t offset = 0;
-    offset += snprintf(buffer + offset, sizeof(buffer) - offset, "{\"items\":[");
-    for (size_t i = 0; i < sizeof(BEST_NODES) / sizeof(BEST_NODES[0]); ++i) {
-        offset += snprintf(buffer + offset, sizeof(buffer) - offset,
-            "%s{\"continentCode\":\"%s\",\"continentLabel\":\"%s\",\"country\":\"%s\",\"isoCode\":\"%s\",\"anchorAirport\":\"%s\",\"avgHours\":%.1f,\"reliability\":%.1f,\"notes\":\"%s\"}",
-            (i == 0 ? "" : ","),
-            BEST_NODES[i].continent_code,
-            BEST_NODES[i].continent_label,
-            BEST_NODES[i].country,
-            BEST_NODES[i].iso_code,
-            BEST_NODES[i].anchor_airport,
-            BEST_NODES[i].avg_hours,
-            BEST_NODES[i].reliability,
-            BEST_NODES[i].notes
-        );
-    }
-    snprintf(buffer + offset, sizeof(buffer) - offset, "]}");
-    return buffer;
-}
-
-WASM_KEEPALIVE
-const char* nuke_wasm_get_airports_json(void) {
-    static char buffer[2048];
-    // Simple static list of coordinates for the best nodes
-    // ICN: 37.46, 126.44 | FRA: 50.03, 8.57 | CVG: 39.04, -84.66
-    // SCL: -33.39, -70.78 | CMN: 33.36, -7.58 | SYD: -33.94, 151.17
-    const char *json = "{\"total\":6,\"offset\":0,\"returned\":6,\"airports\":["
-        "{\"id\":1,\"code\":\"ICN\",\"lat\":37.46,\"lon\":126.44},"
-        "{\"id\":2,\"code\":\"FRA\",\"lat\":50.03,\"lon\":8.57},"
-        "{\"id\":3,\"code\":\"CVG\",\"lat\":39.04,\"lon\":-84.66},"
-        "{\"id\":4,\"code\":\"SCL\",\"lat\":-33.39,\"lon\":-70.78},"
-        "{\"id\":5,\"code\":\"CMN\",\"lat\":33.36,\"lon\":-7.58},"
-        "{\"id\":6,\"code\":\"SYD\",\"lat\":-33.94,\"lon\":151.17}"
+    // For now keep this mocked as it's more like static content
+    return "{\"items\":["
+        "{\"continentCode\":\"AS\",\"continentLabel\":\"아시아\",\"country\":\"대한민국\",\"isoCode\":\"KR\",\"anchorAirport\":\"ICN\",\"avgHours\":16.2,\"reliability\":98.1,\"notes\":\"24시간 통관과 저온 물류 창고를 동시에 운영\"}"
     "]}";
-    snprintf(buffer, sizeof(buffer), "%s", json);
-    return buffer;
-}
-
-WASM_KEEPALIVE
-const char* nuke_wasm_get_health_json(void) {
-    static char buffer[256];
-    const char *json = "{\"airports_loaded\":6,\"routes_loaded\":15,\"nuke_online\":true,\"worker_threads\":0}";
-    snprintf(buffer, sizeof(buffer), "%s", json);
-    return buffer;
-}
-
-WASM_KEEPALIVE
-const char* nuke_wasm_search_routes_json(const char *from, const char *to) {
-    static char buffer[2048];
-    // Return a mocked direct route if codes are valid, else empty
-    if (!from || !to || strlen(from) != 3 || strlen(to) != 3) {
-        snprintf(buffer, sizeof(buffer), "{\"from\":\"%s\",\"to\":\"%s\",\"results\":0,\"paths\":[]}", 
-                 from ? from : "???", to ? to : "???");
-        return buffer;
-    }
-
-    // Just a placeholder "Serverless" result
-    const char *json_fmt = "{\"from\":\"%s\",\"to\":\"%s\",\"results\":1,\"paths\":["
-        "{\"hops\":0,\"legs\":1,\"totalDistanceKm\":1234.5,\"greatCircleKm\":1234.5,\"efficiency\":1.0,"
-        "\"airports\":[{\"id\":1,\"code\":\"%s\"},{\"id\":2,\"code\":\"%s\"}]}"
-    "]}";
-    snprintf(buffer, sizeof(buffer), json_fmt, from, to, from, to);
-    return buffer;
 }

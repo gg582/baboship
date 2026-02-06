@@ -3,10 +3,10 @@ import re
 
 def render_template():
     template_path = 'templates/index.html.tmpl'
-    output_path = 'dist/index.html'
+    output_path = 'docs/index.html'
     
-    if not os.path.exists('dist'):
-        os.makedirs('dist')
+    if not os.path.exists('docs'):
+        os.makedirs('docs')
 
     with open(template_path, 'r', encoding='utf-8') as f:
         content = f.read()
@@ -23,7 +23,7 @@ def render_template():
         pattern = re.compile(r'\{\{\s*' + key + r'\s*\}\}')
         content = pattern.sub(value, content)
 
-    # Fix asset paths and script type for static deployment
+    # Fix asset paths and script type for static deployment in docs/
     content = content.replace('/docs/app.css', 'app.css')
     content = content.replace('<script src="/docs/app.js" defer></script>', '<script src="app.js" type="module" defer></script>')
 

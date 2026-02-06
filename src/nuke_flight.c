@@ -8,6 +8,18 @@
 #include <stdatomic.h>
 #include <sys/types.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+// Mock ttak/cwist for WASM if not linking full libs
+#define ttak_mem_alloc(size, lifetime, now) malloc(size)
+#define ttak_mem_free(ptr) free(ptr)
+#define ttak_mem_realloc(ptr, size, lifetime, now) realloc(ptr, size)
+#define ttak_get_tick_count() 0
+#define ttak_mem_tree_init(t)
+#define ttak_mem_tree_destroy(t)
+#define ttak_mem_tree_add(...) NULL
+#endif
+
 #define EARTH_RADIUS_KM 6371.0
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -65,12 +77,83 @@ static void reset_vertical_arrays(nuke_flight_store_t *store);
 static void *worker_loop(void *arg);
 static void worker_execute(void *arg);
 
+#ifdef __EMSCRIPTEN__
+int nuke_store_load_from_blob(nuke_flight_store_t *store, const void *blob, size_t size) {
+    if (!store || !blob || size < 16) return NUKE_ERR_INPUT;
+    const uint8_t *p = (const uint8_t *)blob;
+    if (memcmp(p, "NUKE", 4) != 0) return NUKE_ERR_DATA;
+    p += 4;
+    uint32_t version = *(uint32_t *)p; p += 4;
+    if (version != 1) return NUKE_ERR_DATA;
+    uint32_t airport_count = *(uint32_t *)p; p += 4;
+    uint32_t route_count = *(uint32_t *)p; p += 4;
+
+    reset_vertical_arrays(store);
+    store->airport_count = airport_count;
+    store->route_count = route_count;
+
+    store->airport_ids = malloc(sizeof(int) * airport_count);
+    store->airport_lat = malloc(sizeof(double) * airport_count);
+    store->airport_lon = malloc(sizeof(double) * airport_count);
+    store->airport_codes = malloc(sizeof(char[4]) * airport_count);
+
+    memcpy(store->airport_ids, p, sizeof(int) * airport_count); p += sizeof(int) * airport_count;
+    memcpy(store->airport_lat, p, sizeof(double) * airport_count); p += sizeof(double) * airport_count;
+    memcpy(store->airport_lon, p, sizeof(double) * airport_count); p += sizeof(double) * airport_count;
+    memcpy(store->airport_codes, p, sizeof(char[4]) * airport_count); p += sizeof(char[4]) * airport_count;
+
+    store->route_offsets = malloc(sizeof(size_t) * airport_count);
+    store->route_counts = malloc(sizeof(size_t) * airport_count);
+    store->adj_route_ids = malloc(sizeof(int) * route_count);
+    store->adj_dst_indices = malloc(sizeof(size_t) * route_count);
+    store->adj_distance = malloc(sizeof(double) * route_count);
+
+    // Read routes
+    memcpy(store->route_offsets, p, sizeof(uint32_t) * airport_count); p += sizeof(uint32_t) * airport_count;
+    memcpy(store->route_counts, p, sizeof(uint32_t) * airport_count); p += sizeof(uint32_t) * airport_count;
+    memcpy(store->adj_route_ids, p, sizeof(int) * route_count); p += sizeof(int) * route_count;
+    memcpy(store->adj_dst_indices, p, sizeof(uint32_t) * route_count); p += sizeof(uint32_t) * route_count;
+    memcpy(store->adj_distance, p, sizeof(double) * route_count); p += sizeof(double) * route_count;
+
+    // Rebuild code hash
+    store->code_capacity = next_pow_two(store->airport_count * 2);
+    store->code_keys = calloc(store->code_capacity, sizeof(uint32_t));
+    store->code_indices = malloc(sizeof(size_t) * store->code_capacity);
+    memset(store->code_indices, 0xFF, sizeof(size_t) * store->code_capacity);
+
+    for (size_t i = 0; i < store->airport_count; ++i) {
+        uint32_t key = pack_code(store->airport_codes[i]);
+        if (!key) continue;
+        size_t cap = store->code_capacity;
+        size_t mask = cap - 1;
+        size_t slot = (key * 2654435761u) & mask;
+        for (size_t attempt = 0; attempt < cap; ++attempt) {
+            if (store->code_keys[slot] == 0) {
+                store->code_keys[slot] = key;
+                store->code_indices[slot] = i;
+                break;
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+
+    return CWIST_NUKE_OK;
+}
+#endif
+
 int nuke_flight_store_init(nuke_flight_store_t *store,
                            sqlite3 *nuke_db,
                            cwist_db *meta_db,
                            size_t worker_threads) {
-    if (!store || !nuke_db) return NUKE_ERR_INPUT;
+    if (!store) return NUKE_ERR_INPUT;
     memset(store, 0, sizeof(*store));
+
+#ifdef __EMSCRIPTEN__
+    (void)nuke_db;
+    (void)meta_db;
+    (void)worker_threads;
+    return CWIST_NUKE_OK;
+#else
     store->nuke_db = nuke_db;
     store->meta_db = meta_db;
     pthread_mutex_init(&store->meta_lock, NULL);
@@ -109,11 +192,13 @@ int nuke_flight_store_init(nuke_flight_store_t *store,
         return refresh_rc;
     }
     return CWIST_NUKE_OK;
+#endif
 }
 
 void nuke_flight_store_destroy(nuke_flight_store_t *store) {
     if (!store) return;
 
+#ifndef __EMSCRIPTEN__
     if (store->worker_threads) {
         for (size_t i = 0; i < store->worker_thread_count; ++i) {
             pthread_cancel(store->worker_threads[i]);
@@ -136,8 +221,12 @@ void nuke_flight_store_destroy(nuke_flight_store_t *store) {
     }
 
     pthread_mutex_destroy(&store->meta_lock);
+#endif
+    
+    reset_vertical_arrays(store);
 }
 
+#ifndef __EMSCRIPTEN__
 static int fetch_count(sqlite3 *db, const char *sql, int64_t *out) {
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
@@ -153,12 +242,27 @@ static int fetch_count(sqlite3 *db, const char *sql, int64_t *out) {
     sqlite3_finalize(stmt);
     return CWIST_NUKE_OK;
 }
+#endif
 
 static void reset_vertical_arrays(nuke_flight_store_t *store) {
+#ifndef __EMSCRIPTEN__
     if (store->mem_tree_ready) {
         ttak_mem_tree_destroy(&store->mem_tree);
         store->mem_tree_ready = false;
     }
+#else
+    free(store->airport_ids);
+    free(store->airport_lat);
+    free(store->airport_lon);
+    free(store->airport_codes);
+    free(store->route_offsets);
+    free(store->route_counts);
+    free(store->adj_route_ids);
+    free(store->adj_dst_indices);
+    free(store->adj_distance);
+    free(store->code_keys);
+    free(store->code_indices);
+#endif
     store->airport_count = 0;
     store->airport_ids = NULL;
     store->airport_lat = NULL;
@@ -174,10 +278,13 @@ static void reset_vertical_arrays(nuke_flight_store_t *store) {
     store->code_indices = NULL;
     store->code_capacity = 0;
 
+#ifndef __EMSCRIPTEN__
     ttak_mem_tree_init(&store->mem_tree);
     store->mem_tree_ready = true;
+#endif
 }
 
+#ifndef __EMSCRIPTEN__
 static int load_airports(nuke_flight_store_t *store) {
     int64_t count = 0;
     int rc = fetch_count(store->nuke_db, "SELECT COUNT(*) FROM airports;", &count);
@@ -340,13 +447,18 @@ static int load_routes(nuke_flight_store_t *store) {
 
     return CWIST_NUKE_OK;
 }
+#endif
 
 int nuke_store_refresh(nuke_flight_store_t *store) {
     if (!store) return NUKE_ERR_INPUT;
     reset_vertical_arrays(store);
+#ifdef __EMSCRIPTEN__
+    return CWIST_NUKE_OK;
+#else
     int rc = load_airports(store);
     if (rc != CWIST_NUKE_OK) return rc;
     return load_routes(store);
+#endif
 }
 
 int nuke_path_buffer_init(nuke_path_buffer_t *buffer, size_t capacity) {
@@ -446,9 +558,13 @@ static void worker_execute(void *arg) {
         nuke_route_frame_t frame = stack[--top];
 
         if (frame.airport_idx == group->dst_idx) {
+#ifndef __EMSCRIPTEN__
             pthread_mutex_lock(&group->buffer_lock);
+#endif
             append_result_locked(group, &frame, frame.total_distance);
+#ifndef __EMSCRIPTEN__
             pthread_mutex_unlock(&group->buffer_lock);
+#endif
             continue;
         }
 
@@ -498,13 +614,16 @@ static void worker_execute(void *arg) {
     ttak_mem_free(stack);
 
 done:
+#ifndef __EMSCRIPTEN__
     if (atomic_fetch_sub(&group->pending_jobs, 1) == 1) {
         pthread_mutex_lock(&group->wait_lock);
         pthread_cond_signal(&group->wait_cond);
         pthread_mutex_unlock(&group->wait_lock);
     }
+#endif
 }
 
+#ifndef __EMSCRIPTEN__
 static void *worker_loop(void *arg) {
     cwist_io_queue *queue = (cwist_io_queue *)arg;
     pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
@@ -512,6 +631,7 @@ static void *worker_loop(void *arg) {
     cwist_io_queue_run(queue);
     return NULL;
 }
+#endif
 
 static int compare_efficiency(const void *a, const void *b) {
     const nuke_path_result_t *pa = a;
@@ -562,6 +682,28 @@ int nuke_search_routes(nuke_flight_store_t *store,
         return CWIST_NUKE_OK;
     }
 
+#ifdef __EMSCRIPTEN__
+    nuke_worker_group_t group = {
+        .store = store,
+        .buffer = buffer,
+        .max_results = max_results,
+        .max_legs = max_transfers + 1,
+        .dst_idx = dst_idx,
+        .src_idx = src_idx,
+        .gc_distance = gc
+    };
+    atomic_store(&group.pending_jobs, 0);
+    atomic_store(&group.stop, false);
+
+    size_t start = store->route_offsets[src_idx];
+    for (size_t i = 0; i < degree; ++i) {
+        if (atomic_load(&group.stop)) break;
+        nuke_worker_job_t *pjob = malloc(sizeof(nuke_worker_job_t));
+        pjob->group = &group;
+        pjob->adj_index = start + i;
+        worker_execute(pjob);
+    }
+#else
     nuke_worker_group_t group = {
         .store = store,
         .buffer = buffer,
@@ -594,7 +736,6 @@ int nuke_search_routes(nuke_flight_store_t *store,
         }
     }
 
-    // Wait for jobs to drain
     pthread_mutex_lock(&group.wait_lock);
     while (atomic_load(&group.pending_jobs) > 0) {
         pthread_cond_wait(&group.wait_cond, &group.wait_lock);
@@ -604,12 +745,15 @@ int nuke_search_routes(nuke_flight_store_t *store,
     pthread_mutex_destroy(&group.buffer_lock);
     pthread_mutex_destroy(&group.wait_lock);
     pthread_cond_destroy(&group.wait_cond);
+#endif
 
     if (buffer->count > 1) {
         qsort(buffer->items, buffer->count, sizeof(nuke_path_result_t), compare_efficiency);
     }
 
+#ifndef __EMSCRIPTEN__
     record_search(store, params->src_code, params->dst_code, max_transfers, buffer->count);
+#endif
     return CWIST_NUKE_OK;
 }
 
@@ -690,6 +834,7 @@ static double great_circle(double lat1, double lon1, double lat2, double lon2) {
     return EARTH_RADIUS_KM * c;
 }
 
+#ifndef __EMSCRIPTEN__
 static int ensure_meta_schema(nuke_flight_store_t *store) {
     if (!store || !store->meta_db) return CWIST_NUKE_OK;
     const char *ddl =
@@ -733,3 +878,4 @@ static void record_search(nuke_flight_store_t *store,
     sqlite3_finalize(stmt);
     pthread_mutex_unlock(&store->meta_lock);
 }
+#endif

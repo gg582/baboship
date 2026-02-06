@@ -4,14 +4,24 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
+
+#ifdef __EMSCRIPTEN__
+#include <sys/types.h>
+typedef void sqlite3;
+typedef struct { void *conn; } cwist_db;
+typedef struct { void *q; } cwist_io_queue;
+// Emscripten already defines pthread_t in sys/types.h
+// but we might need a dummy for ttak_mem_tree_t if not used
+typedef struct { int dummy; } ttak_mem_tree_t;
+#else
 #include <sqlite3.h>
 #include <pthread.h>
-
 #include <cwist/core/db/sql.h>
 #include <cwist/sys/io/cwist_io.h>
 #include <ttak/mem_tree/mem_tree.h>
 #include <ttak/mem/mem.h>
 #include <ttak/timing/timing.h>
+#endif
 
 #define NUKE_MAX_TRANSFERS 3
 #define NUKE_MAX_LEGS (NUKE_MAX_TRANSFERS + 1)
@@ -42,10 +52,18 @@ typedef struct {
     size_t capacity;
 } nuke_path_buffer_t;
 
+#ifndef __EMSCRIPTEN__
+#include <pthread.h>
+#endif
+
 struct nuke_flight_store {
     sqlite3 *nuke_db;
     cwist_db *meta_db;
+#ifndef __EMSCRIPTEN__
     pthread_mutex_t meta_lock;
+#else
+    int meta_lock_dummy;
+#endif
 
     // Memory discipline
     ttak_mem_tree_t mem_tree;
@@ -73,7 +91,11 @@ struct nuke_flight_store {
 
     // Worker pool
     cwist_io_queue *worker_queue;
+#ifndef __EMSCRIPTEN__
     pthread_t *worker_threads;
+#else
+    void *worker_threads;
+#endif
     size_t worker_thread_count;
 };
 
@@ -95,5 +117,9 @@ int nuke_search_routes(nuke_flight_store_t *store,
                        nuke_path_buffer_t *buffer);
 
 bool nuke_store_has_airport(const nuke_flight_store_t *store, const char code[4]);
+
+#ifdef __EMSCRIPTEN__
+int nuke_store_load_from_blob(nuke_flight_store_t *store, const void *blob, size_t size);
+#endif
 
 #endif

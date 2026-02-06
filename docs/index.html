@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>바보쉽 라우트 콘솔</title>
+    <link rel="stylesheet" href="app.css">
+</head>
+<body class="app-shell">
+    <main class="layout">
+        <section class="card hero-card">
+            <div class="pill">Global Freight Control</div>
+            <h1>바보쉽 라우트 콘솔</h1>
+            <p>실시간 항로 지표와 통제된 규제를 결합해, 배송 최단 시간 경로를 한 화면에서 설계하세요.</p>
+            <div class="stat-grid">
+                <div class="stat">
+                    <div class="label">공항 수</div>
+                    <div class="value" id="stat-airports">--</div>
+                </div>
+                <div class="stat">
+                    <div class="label">노선 수</div>
+                    <div class="value" id="stat-routes">--</div>
+                </div>
+                <div class="stat">
+                    <div class="label">처리 스레드</div>
+                    <div class="value" id="stat-workers">--</div>
+                </div>
+            </div>
+        </section>
+
+        <div class="grid">
+            <section class="card controls-card">
+                <h2>항공 경로 탐색</h2>
+                <p>3자리 IATA 코드를 직접 입력하거나 지도에서 공항을 누르면 경로가 설정됩니다. 대륙별 법적 제한을 자동으로 제외합니다.</p>
+                <div class="form-grid">
+                    <label>
+                        <span>출발 공항 (IATA)</span>
+                        <input type="text" maxlength="3" placeholder="예: ICN" id="from-code">
+                    </label>
+                    <label>
+                        <span>도착 공항 (IATA)</span>
+                        <input type="text" maxlength="3" placeholder="예: FRA" id="to-code">
+                    </label>
+                    <label>
+                        <span>최대 환승 횟수</span>
+                        <input type="number" min="0" max="3" value="2" id="max-transfers">
+                    </label>
+                    <label>
+                        <span>표시할 경로 수</span>
+                        <input type="number" min="1" max="64" value="8" id="max-results">
+                    </label>
+                </div>
+                <div class="form-actions">
+                    <button class="ghost" type="button" id="swap-btn">출발/도착 맞바꾸기</button>
+                </div>
+            </section>
+
+            <section class="card map-card">
+                <h2>지도에서 선택</h2>
+                <div class="map-mode">
+                    <button type="button" class="active" data-field="from">출발 공항 지정</button>
+                    <button type="button" data-field="to">도착 공항 지정</button>
+                </div>
+                <div id="map-wrapper">
+                    <canvas id="route-map" class="map-canvas"></canvas>
+                    <div id="map-loader">공항 데이터를 불러오는 중...</div>
+                </div>
+                <div class="selection-panel">
+                    <div class="selection-pill">출발: <strong id="selection-from">--</strong></div>
+                    <div class="selection-pill">도착: <strong id="selection-to">--</strong></div>
+                </div>
+                <div class="map-status" id="map-status">
+                    지도 위의 도시를 클릭하면 가장 가까운 공항을 자동으로 지정합니다. 위 버튼으로 편집할 공항을 선택하세요.
+                </div>
+            </section>
+        </div>
+
+        <section class="card results-card">
+            <div class="results-header">
+                <h2>노선 결과</h2>
+                <button type="button" id="search-btn">경로 계산</button>
+            </div>
+            <div id="route-results"></div>
+        </section>
+
+        <section class="card best-card">
+            <div class="results-header">
+                <h2>최적 경로 찾기</h2>
+                <button type="button" id="best-refresh-btn">데이터 새로고침</button>
+            </div>
+            <div id="best-results" class="best-grid"></div>
+        </section>
+    </main>
+    <div id="map-modal" class="map-modal" aria-hidden="true">
+        <div class="map-modal-content">
+            <button type="button" class="map-modal-close" id="map-modal-close" aria-label="크게보기 닫기">X</button>
+            <canvas id="route-map-large" class="map-canvas"></canvas>
+        </div>
+    </div>
+    <script src="app.js" type="module" defer></script>
+</body>
+</html>
