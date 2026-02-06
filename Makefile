@@ -7,12 +7,12 @@ LDFLAGS += -pthread
 LDLIBS += -lm -ldl -lssl -lcrypto -luriparser -lcjson -lcwist -lttak
 
 WASM_BUILD_DIR := build/wasm
-WASM_DIST_DIR := dist/wasm
+WASM_DIST_DIR := docs/wasm
 WASM_MODULE := nuke_kernel
 WASM_TARGET := $(WASM_DIST_DIR)/$(WASM_MODULE).js
 WASM_SRC := wasm/$(WASM_MODULE).c
-WASM_EXPORTS := '["_nuke_wasm_gc_distance","_nuke_wasm_route_distance","_nuke_wasm_efficiency","_nuke_wasm_is_valid_iata","_nuke_wasm_get_best_nodes_json","_nuke_wasm_get_airports_json"]'
-WASM_RUNTIME_METHODS := '["cwrap","ccall","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","HEAPF64"]'
+WASM_EXPORTS := '["_nuke_wasm_gc_distance","_nuke_wasm_route_distance","_nuke_wasm_efficiency","_nuke_wasm_is_valid_iata","_nuke_wasm_get_best_nodes_json","_nuke_wasm_get_airports_json","_nuke_wasm_get_health_json","_nuke_wasm_search_routes_json","_nuke_wasm_calc_score"]'
+WASM_RUNTIME_METHODS := '["cwrap","ccall","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","HEAPF64","allocate","intArrayFromString","ALLOC_NORMAL"]'
 WASM_FLAGS := -std=c17 -Wall -Wextra -Wpedantic -O3 -Iinclude
 WASM_EMFLAGS := -s MODULARIZE=1 -s EXPORT_ES6=1 -s EXPORT_NAME=\"createNukeKernel\" -s ENVIRONMENT=web,worker -s ALLOW_MEMORY_GROWTH=1 -s NO_EXIT_RUNTIME=1
 

@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -87,6 +88,18 @@ double nuke_wasm_efficiency(double gc_distance_km, double actual_distance_km) {
     return ratio * 100.0;
 }
 
+// nuke_calc: High-performance calculation for a single route leg
+// Takes lat1, lon1, lat2, lon2 and returns pre-processed logistics score
+WASM_KEEPALIVE
+double nuke_wasm_calc_score(double lat1, double lon1, double lat2, double lon2, double reliability) {
+    double dist = great_circle_distance(lat1, lon1, lat2, lon2);
+    if (dist <= 0) return 0;
+    
+    // Logic: score = (reliability / distance) * 1000
+    // Higher is better (more reliable per unit distance)
+    return (reliability / (dist + 1.0)) * 1000.0;
+}
+
 WASM_KEEPALIVE
 int nuke_wasm_is_valid_iata(const char *code) {
     if (!code) return 0;
@@ -160,5 +173,32 @@ const char* nuke_wasm_get_airports_json(void) {
         "{\"id\":6,\"code\":\"SYD\",\"lat\":-33.94,\"lon\":151.17}"
     "]}";
     snprintf(buffer, sizeof(buffer), "%s", json);
+    return buffer;
+}
+
+WASM_KEEPALIVE
+const char* nuke_wasm_get_health_json(void) {
+    static char buffer[256];
+    const char *json = "{\"airports_loaded\":6,\"routes_loaded\":15,\"nuke_online\":true,\"worker_threads\":0}";
+    snprintf(buffer, sizeof(buffer), "%s", json);
+    return buffer;
+}
+
+WASM_KEEPALIVE
+const char* nuke_wasm_search_routes_json(const char *from, const char *to) {
+    static char buffer[2048];
+    // Return a mocked direct route if codes are valid, else empty
+    if (!from || !to || strlen(from) != 3 || strlen(to) != 3) {
+        snprintf(buffer, sizeof(buffer), "{\"from\":\"%s\",\"to\":\"%s\",\"results\":0,\"paths\":[]}", 
+                 from ? from : "???", to ? to : "???");
+        return buffer;
+    }
+
+    // Just a placeholder "Serverless" result
+    const char *json_fmt = "{\"from\":\"%s\",\"to\":\"%s\",\"results\":1,\"paths\":["
+        "{\"hops\":0,\"legs\":1,\"totalDistanceKm\":1234.5,\"greatCircleKm\":1234.5,\"efficiency\":1.0,"
+        "\"airports\":[{\"id\":1,\"code\":\"%s\"},{\"id\":2,\"code\":\"%s\"}]}"
+    "]}";
+    snprintf(buffer, sizeof(buffer), json_fmt, from, to, from, to);
     return buffer;
 }

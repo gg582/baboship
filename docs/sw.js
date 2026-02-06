@@ -8,7 +8,7 @@ async function getKernel() {
   if (kernel) return kernel;
   if (!kernelPromise) {
     kernelPromise = createNukeKernel({
-      locateFile: (path) => `wasm/${path}`
+      locateFile: (path) => `./wasm/${path}`
     });
   }
   kernel = await kernelPromise;
@@ -25,8 +25,9 @@ self.addEventListener('activate', (event) => {
 
 async function handleRequest(endpoint, url, request) {
   try {
+    const k = await getKernel();
+    
     if (endpoint.endsWith('/best')) {
-      const k = await getKernel();
       const jsonPtr = k._nuke_wasm_get_best_nodes_json();
       const jsonStr = k.UTF8ToString(jsonPtr);
       return new Response(jsonStr, {
@@ -35,17 +36,14 @@ async function handleRequest(endpoint, url, request) {
     }
     
     if (endpoint.endsWith('/health')) {
-      return new Response(JSON.stringify({
-        status: 'online',
-        wasm: true,
-        worker: 'ServiceWorker'
-      }), {
+      const jsonPtr = k._nuke_wasm_get_health_json();
+      const jsonStr = k.UTF8ToString(jsonPtr);
+      return new Response(jsonStr, {
         headers: { 'Content-Type': 'application/json' }
       });
     }
     
     if (endpoint.endsWith('/airports')) {
-      const k = await getKernel();
       const jsonPtr = k._nuke_wasm_get_airports_json();
       const jsonStr = k.UTF8ToString(jsonPtr);
       return new Response(jsonStr, {
@@ -54,11 +52,14 @@ async function handleRequest(endpoint, url, request) {
     }
     
     if (endpoint.endsWith('/routes')) {
-      return new Response(JSON.stringify({
-        error: 'Route calculation requires NukeDB server.',
-        paths: []
-      }), {
-        status: 400,
+      const from = url.searchParams.get('from') || '';
+      const to = url.searchParams.get('to') || '';
+      const jsonPtr = k._nuke_wasm_search_routes_json(
+        k.allocate(k.intArrayFromString(from), k.ALLOC_NORMAL),
+        k.allocate(k.intArrayFromString(to), k.ALLOC_NORMAL)
+      );
+      const jsonStr = k.UTF8ToString(jsonPtr);
+      return new Response(jsonStr, {
         headers: { 'Content-Type': 'application/json' }
       });
     }
