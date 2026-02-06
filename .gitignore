@@ -1,5 +1,4 @@
 build/
-dist/
 nukedb_app
 *.o
 *.js.map
