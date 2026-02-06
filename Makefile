@@ -15,7 +15,7 @@ WASM_SRC := wasm/$(WASM_MODULE).c src/nuke_flight.c
 WASM_EXPORTS := '["_nuke_wasm_init","_nuke_wasm_load_data","_nuke_wasm_gc_distance","_nuke_wasm_route_distance","_nuke_wasm_efficiency","_nuke_wasm_is_valid_iata","_nuke_wasm_get_best_nodes_json","_nuke_wasm_get_airports_json","_nuke_wasm_get_health_json","_nuke_wasm_search_routes_json","_nuke_wasm_calc_score","_malloc","_free"]'
 WASM_RUNTIME_METHODS := '["cwrap","ccall","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","HEAPF64","allocate","intArrayFromString","ALLOC_NORMAL"]'
 WASM_FLAGS := -std=c17 -Wall -Wextra -Wpedantic -O2 -Iinclude -D__EMSCRIPTEN__
-WASM_EMFLAGS := -s MODULARIZE=1 -s EXPORT_ES6=1 -s EXPORT_NAME=\"createNukeKernel\" -s ENVIRONMENT=web,worker -s ALLOW_MEMORY_GROWTH=1 -s NO_EXIT_RUNTIME=1 -s TOTAL_MEMORY=33554432 -s ERROR_ON_UNDEFINED_SYMBOLS=0
+WASM_EMFLAGS := -s MODULARIZE=1 -s EXPORT_ES6=1 -s EXPORT_NAME=\"createNukeKernel\" -s ENVIRONMENT=web,worker -s ALLOW_MEMORY_GROWTH=1 -s NO_EXIT_RUNTIME=1 -s TOTAL_MEMORY=33554432 -s ERROR_ON_UNDEFINED_SYMBOLS=1
 
 CWIST_DIR := lib/cwist
 TTAK_DIR := lib/libttak

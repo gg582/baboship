@@ -65,6 +65,7 @@ typedef struct {
 static uint32_t pack_code(const char *code);
 static size_t next_pow_two(size_t value);
 static double great_circle(double lat1, double lon1, double lat2, double lon2);
+#ifndef __EMSCRIPTEN__
 static ssize_t find_airport_index_by_id(const nuke_flight_store_t *store, int id);
 static int ensure_meta_schema(nuke_flight_store_t *store);
 static void record_search(nuke_flight_store_t *store,
@@ -72,9 +73,12 @@ static void record_search(nuke_flight_store_t *store,
                           const char *dst_code,
                           size_t max_transfers,
                           size_t results);
+#endif
 static size_t lookup_airport_index(const nuke_flight_store_t *store, uint32_t packed_code);
 static void reset_vertical_arrays(nuke_flight_store_t *store);
+#ifndef __EMSCRIPTEN__
 static void *worker_loop(void *arg);
+#endif
 static void worker_execute(void *arg);
 
 #ifdef __EMSCRIPTEN__
@@ -464,6 +468,7 @@ int nuke_store_refresh(nuke_flight_store_t *store) {
 int nuke_path_buffer_init(nuke_path_buffer_t *buffer, size_t capacity) {
     if (!buffer || !capacity) return NUKE_ERR_INPUT;
     uint64_t now = ttak_get_tick_count();
+    (void)now;
     buffer->items = ttak_mem_alloc(sizeof(nuke_path_result_t) * capacity,
                                    __TTAK_UNSAFE_MEM_FOREVER__,
                                    now);
@@ -546,6 +551,7 @@ static void worker_execute(void *arg) {
 
     size_t stack_cap = NUKE_STACK_PREALLOC;
     uint64_t now = ttak_get_tick_count();
+    (void)now;
     nuke_route_frame_t *stack = ttak_mem_alloc(sizeof(nuke_route_frame_t) * stack_cap,
                                                __TTAK_UNSAFE_MEM_FOREVER__,
                                                now);
@@ -620,6 +626,8 @@ done:
         pthread_cond_signal(&group->wait_cond);
         pthread_mutex_unlock(&group->wait_lock);
     }
+#else
+    (void)0;
 #endif
 }
 
@@ -789,6 +797,7 @@ static size_t next_pow_two(size_t value) {
     return value + 1;
 }
 
+#ifndef __EMSCRIPTEN__
 static ssize_t find_airport_index_by_id(const nuke_flight_store_t *store, int id) {
     size_t left = 0;
     size_t right = store->airport_count;
@@ -801,6 +810,7 @@ static ssize_t find_airport_index_by_id(const nuke_flight_store_t *store, int id
     }
     return -1;
 }
+#endif
 
 static size_t lookup_airport_index(const nuke_flight_store_t *store, uint32_t packed_code) {
     if (!packed_code || store->code_capacity == 0) return SIZE_MAX;
