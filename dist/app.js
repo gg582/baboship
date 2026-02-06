@@ -4,8 +4,45 @@ const state = {
   routes: [],
   activeField: 'from',
   selection: { from: null, to: null },
-  best: []
+  best: [],
+  kernel: null
 };
+
+// WASM Module Loader
+async function initWasm() {
+  try {
+    const { default: createNukeKernel } = await import('./wasm/nuke_kernel.js');
+    state.kernel = await createNukeKernel({
+      locateFile: (path) => `wasm/${path}`
+    });
+    console.log('WASM Kernel initialized');
+  } catch (err) {
+    console.warn('WASM Kernel failed to load:', err);
+  }
+}
+
+// Service Worker Registration for WASM Server
+async function initServiceWorker() {
+  if ('serviceWorker' in navigator) {
+    try {
+      const registration = await navigator.serviceWorker.register('sw.js', {
+        scope: './',
+        type: 'module'
+      });
+      console.log('Service Worker registered with scope:', registration.scope);
+      
+      // Wait for SW to be ready
+      await navigator.serviceWorker.ready;
+      
+      // Refresh data after SW is active
+      fetchBest();
+      fetchHealth();
+    } catch (err) {
+      console.error('Service Worker registration failed:', err);
+    }
+  }
+}
+
 const continentShapes = [
   [[-168,72],[-140,60],[-120,50],[-110,45],[-95,50],[-80,45],[-60,45],[-55,25],[-75,8],[-95,10],[-120,25],[-135,40],[-150,60]],
   [[-82,12],[-75,-2],[-70,-15],[-65,-30],[-60,-50],[-45,-55],[-40,-30],[-50,0]],
@@ -16,6 +53,8 @@ const continentShapes = [
 
 document.addEventListener('DOMContentLoaded', () => {
   initWasm();
+  initServiceWorker();
+
   const mainCanvas = document.getElementById('route-map');
   const loader = document.getElementById('map-loader');
   const statusEl = document.getElementById('map-status');
@@ -57,18 +96,6 @@ document.addEventListener('DOMContentLoaded', () => {
   };
   const modalHintMessage = '크게보기 모드: 드래그로 이동하고 클릭해서 공항을 지정하세요. X 버튼으로 닫습니다.';
   const mapCanvases = new Map();
-  let nukeKernel = null;
-
-  async function initWasm() {
-    try {
-      // In a static deployment, wasm/nuke_kernel.js is at the root
-      const { default: createNukeKernel } = await import('./wasm/nuke_kernel.js');
-      nukeKernel = await createNukeKernel();
-      console.log('Nuke WASM Kernel initialized');
-    } catch (err) {
-      console.error('Failed to initialize Nuke WASM Kernel:', err);
-    }
-  }
 
   function registerCanvas(key, element) {
     if (!element) {
@@ -274,18 +301,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const target = field === 'from' ? fromInput : toInput;
     const cleaned = (value || '').trim().toUpperCase();
     target.value = cleaned;
-
-    // Use WASM for IATA validation if available
-    if (nukeKernel && cleaned.length > 0) {
-      const isValid = nukeKernel._nuke_wasm_is_valid_iata(cleaned);
-      if (!isValid) {
-        console.warn(`Invalid IATA code detected by WASM: ${cleaned}`);
-        target.classList.add('invalid');
-      } else {
-        target.classList.remove('invalid');
-      }
-    }
-
     const airport = state.airportMap.get(cleaned) || null;
     state.selection[field] = airport;
     updateSelectionLabels();
@@ -560,7 +575,7 @@ document.addEventListener('DOMContentLoaded', () => {
           limit: String(batchSize),
           offset: String(offset)
         });
-        const res = await fetch('/airports?' + params.toString());
+        const res = await fetch('./airports?' + params.toString());
         const data = await res.json();
         if (!res.ok) {
           throw new Error(data.error || '공항 데이터를 불러오지 못했습니다.');
@@ -611,7 +626,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function fetchHealth() {
-    fetch('/health')
+    fetch('./health')
       .then(res => res.json())
       .then(data => {
         statRoutes.textContent = (data.routes_loaded || 0).toLocaleString();
@@ -634,7 +649,7 @@ document.addEventListener('DOMContentLoaded', () => {
       maxResults: resultsInput.value || '8'
     });
     statusEl.textContent = '가능한 경로를 계산하는 중입니다...';
-    fetch('/routes?' + params.toString())
+    fetch('./routes?' + params.toString())
       .then(async res => {
         const data = await res.json();
         if (!res.ok) {
@@ -654,7 +669,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function fetchBest() {
     bestContainer.classList.add('loading');
-    fetch('/best')
+    fetch('./best')
       .then(async res => {
         const data = await res.json();
         if (!res.ok) {
@@ -713,11 +728,21 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('resize', resizeAllCanvases);
   bestRefreshBtn.addEventListener('click', fetchBest);
 
+  async function init() {
+    await initWasm();
+    await initServiceWorker();
+    
+    // If Service Worker didn't claim the page yet, or we are on a platform without SW,
+    // we still try to fetch. But initServiceWorker waits for 'ready'.
+    fetchAirports();
+    fetchHealth();
+    fetchBest();
+  }
+
   resizeAllCanvases();
   setActiveField('from');
   statusEl.textContent = '지도를 클릭하거나 공항 코드를 입력하세요.';
-  fetchAirports();
-  fetchHealth();
   renderResults(null);
-  fetchBest();
+  
+  init();
 });

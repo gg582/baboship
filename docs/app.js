@@ -575,7 +575,7 @@ document.addEventListener('DOMContentLoaded', () => {
           limit: String(batchSize),
           offset: String(offset)
         });
-        const res = await fetch('airports?' + params.toString());
+        const res = await fetch('./airports?' + params.toString());
         const data = await res.json();
         if (!res.ok) {
           throw new Error(data.error || '공항 데이터를 불러오지 못했습니다.');
@@ -626,7 +626,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function fetchHealth() {
-    fetch('health')
+    fetch('./health')
       .then(res => res.json())
       .then(data => {
         statRoutes.textContent = (data.routes_loaded || 0).toLocaleString();
@@ -649,7 +649,7 @@ document.addEventListener('DOMContentLoaded', () => {
       maxResults: resultsInput.value || '8'
     });
     statusEl.textContent = '가능한 경로를 계산하는 중입니다...';
-    fetch('routes?' + params.toString())
+    fetch('./routes?' + params.toString())
       .then(async res => {
         const data = await res.json();
         if (!res.ok) {
@@ -669,7 +669,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function fetchBest() {
     bestContainer.classList.add('loading');
-    fetch('best')
+    fetch('./best')
       .then(async res => {
         const data = await res.json();
         if (!res.ok) {
@@ -728,11 +728,21 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('resize', resizeAllCanvases);
   bestRefreshBtn.addEventListener('click', fetchBest);
 
+  async function init() {
+    await initWasm();
+    await initServiceWorker();
+    
+    // If Service Worker didn't claim the page yet, or we are on a platform without SW,
+    // we still try to fetch. But initServiceWorker waits for 'ready'.
+    fetchAirports();
+    fetchHealth();
+    fetchBest();
+  }
+
   resizeAllCanvases();
   setActiveField('from');
   statusEl.textContent = '지도를 클릭하거나 공항 코드를 입력하세요.';
-  fetchAirports();
-  fetchHealth();
   renderResults(null);
-  fetchBest();
+  
+  init();
 });

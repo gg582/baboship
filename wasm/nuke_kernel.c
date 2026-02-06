@@ -144,3 +144,21 @@ const char* nuke_wasm_get_best_nodes_json(void) {
     snprintf(buffer + offset, sizeof(buffer) - offset, "]}");
     return buffer;
 }
+
+WASM_KEEPALIVE
+const char* nuke_wasm_get_airports_json(void) {
+    static char buffer[2048];
+    // Simple static list of coordinates for the best nodes
+    // ICN: 37.46, 126.44 | FRA: 50.03, 8.57 | CVG: 39.04, -84.66
+    // SCL: -33.39, -70.78 | CMN: 33.36, -7.58 | SYD: -33.94, 151.17
+    const char *json = "{\"total\":6,\"offset\":0,\"returned\":6,\"airports\":["
+        "{\"id\":1,\"code\":\"ICN\",\"lat\":37.46,\"lon\":126.44},"
+        "{\"id\":2,\"code\":\"FRA\",\"lat\":50.03,\"lon\":8.57},"
+        "{\"id\":3,\"code\":\"CVG\",\"lat\":39.04,\"lon\":-84.66},"
+        "{\"id\":4,\"code\":\"SCL\",\"lat\":-33.39,\"lon\":-70.78},"
+        "{\"id\":5,\"code\":\"CMN\",\"lat\":33.36,\"lon\":-7.58},"
+        "{\"id\":6,\"code\":\"SYD\",\"lat\":-33.94,\"lon\":151.17}"
+    "]}";
+    snprintf(buffer, sizeof(buffer), "%s", json);
+    return buffer;
+}
