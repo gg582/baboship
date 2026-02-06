@@ -535,7 +535,7 @@ document.addEventListener('DOMContentLoaded', () => {
           limit: String(batchSize),
           offset: String(offset)
         });
-        const res = await fetch('/airports?' + params.toString());
+        const res = await fetch('airports?' + params.toString());
         const data = await res.json();
         if (!res.ok) {
           throw new Error(data.error || '공항 데이터를 불러오지 못했습니다.');
@@ -586,7 +586,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function fetchHealth() {
-    fetch('/health')
+    fetch('health')
       .then(res => res.json())
       .then(data => {
         statRoutes.textContent = (data.routes_loaded || 0).toLocaleString();
@@ -609,7 +609,7 @@ document.addEventListener('DOMContentLoaded', () => {
       maxResults: resultsInput.value || '8'
     });
     statusEl.textContent = '가능한 경로를 계산하는 중입니다...';
-    fetch('/routes?' + params.toString())
+    fetch('routes?' + params.toString())
       .then(async res => {
         const data = await res.json();
         if (!res.ok) {
@@ -629,7 +629,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function fetchBest() {
     bestContainer.classList.add('loading');
-    fetch('/best')
+    fetch('best')
       .then(async res => {
         const data = await res.json();
         if (!res.ok) {
