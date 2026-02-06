@@ -45,6 +45,7 @@ jobs:
           mkdir -p dist
           cp docs/app.js dist/
           cp docs/app.css dist/
+          cp docs/sw.js dist/
           python3 scripts/generate_static_index.py
 
       - name: Setup Pages

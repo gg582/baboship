@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -99,4 +100,47 @@ int nuke_wasm_is_valid_iata(const char *code) {
         }
     }
     return code[3] == '\0';
+}
+
+typedef struct {
+    const char *continent_code;
+    const char *continent_label;
+    const char *country;
+    const char *iso_code;
+    const char *anchor_airport;
+    double avg_hours;
+    double reliability;
+    const char *notes;
+} logistics_best_node_t;
+
+static const logistics_best_node_t BEST_NODES[] = {
+    {"AS", "아시아", "대한민국", "KR", "ICN", 16.2, 98.1, "24시간 통관과 저온 물류 창고를 동시에 운영"},
+    {"EU", "유럽", "독일", "DE", "FRA", 15.7, 97.4, "프랑크푸르트 기반의 안정적인 인프라"},
+    {"NA", "북아메리카", "미국", "US", "CVG", 14.3, 96.9, "동서부를 동시에 커버하는 대형 허브"},
+    {"SA", "남아메리카", "칠레", "CL", "SCL", 18.5, 94.1, "안정적인 냉장 전력과 태평양 루트"},
+    {"AF", "아프리카", "모로코", "MA", "CMN", 17.6, 92.3, "대서양 관문과 유럽 연계성이 우수"},
+    {"OC", "오세아니아", "호주", "AU", "SYD", 19.2, 93.8, "복합 운송이 쉬운 시드니 권역"}
+};
+
+WASM_KEEPALIVE
+const char* nuke_wasm_get_best_nodes_json(void) {
+    static char buffer[4096];
+    size_t offset = 0;
+    offset += snprintf(buffer + offset, sizeof(buffer) - offset, "{\"items\":[");
+    for (size_t i = 0; i < sizeof(BEST_NODES) / sizeof(BEST_NODES[0]); ++i) {
+        offset += snprintf(buffer + offset, sizeof(buffer) - offset,
+            "%s{\"continentCode\":\"%s\",\"continentLabel\":\"%s\",\"country\":\"%s\",\"isoCode\":\"%s\",\"anchorAirport\":\"%s\",\"avgHours\":%.1f,\"reliability\":%.1f,\"notes\":\"%s\"}",
+            (i == 0 ? "" : ","),
+            BEST_NODES[i].continent_code,
+            BEST_NODES[i].continent_label,
+            BEST_NODES[i].country,
+            BEST_NODES[i].iso_code,
+            BEST_NODES[i].anchor_airport,
+            BEST_NODES[i].avg_hours,
+            BEST_NODES[i].reliability,
+            BEST_NODES[i].notes
+        );
+    }
+    snprintf(buffer + offset, sizeof(buffer) - offset, "]}");
+    return buffer;
 }

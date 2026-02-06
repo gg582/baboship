@@ -4,8 +4,45 @@ const state = {
   routes: [],
   activeField: 'from',
   selection: { from: null, to: null },
-  best: []
+  best: [],
+  kernel: null
 };
+
+// WASM Module Loader
+async function initWasm() {
+  try {
+    const { default: createNukeKernel } = await import('./wasm/nuke_kernel.js');
+    state.kernel = await createNukeKernel({
+      locateFile: (path) => `wasm/${path}`
+    });
+    console.log('WASM Kernel initialized');
+  } catch (err) {
+    console.warn('WASM Kernel failed to load:', err);
+  }
+}
+
+// Service Worker Registration for WASM Server
+async function initServiceWorker() {
+  if ('serviceWorker' in navigator) {
+    try {
+      const registration = await navigator.serviceWorker.register('sw.js', {
+        scope: './',
+        type: 'module'
+      });
+      console.log('Service Worker registered with scope:', registration.scope);
+      
+      // Wait for SW to be ready
+      await navigator.serviceWorker.ready;
+      
+      // Refresh data after SW is active
+      fetchBest();
+      fetchHealth();
+    } catch (err) {
+      console.error('Service Worker registration failed:', err);
+    }
+  }
+}
+
 const continentShapes = [
   [[-168,72],[-140,60],[-120,50],[-110,45],[-95,50],[-80,45],[-60,45],[-55,25],[-75,8],[-95,10],[-120,25],[-135,40],[-150,60]],
   [[-82,12],[-75,-2],[-70,-15],[-65,-30],[-60,-50],[-45,-55],[-40,-30],[-50,0]],
@@ -15,6 +52,9 @@ const continentShapes = [
 ];
 
 document.addEventListener('DOMContentLoaded', () => {
+  initWasm();
+  initServiceWorker();
+
   const mainCanvas = document.getElementById('route-map');
   const loader = document.getElementById('map-loader');
   const statusEl = document.getElementById('map-status');
