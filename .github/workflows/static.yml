@@ -42,11 +42,16 @@ jobs:
 
       - name: Prepare dist directory
         run: |
-          mkdir -p dist
+          mkdir -p dist/wasm
           cp docs/app.js dist/
           cp docs/app.css dist/
           cp docs/sw.js dist/
+          cp docs/airports.json dist/
+          cp docs/wasm/nuke_blob.bin dist/wasm/
+          cp docs/wasm/nuke_kernel.js dist/wasm/
+          cp docs/wasm/nuke_kernel.wasm dist/wasm/
           python3 scripts/generate_static_index.py
+          cp docs/index.html dist/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
