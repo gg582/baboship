@@ -215,13 +215,20 @@ const char* nuke_wasm_get_best_nodes_json(void) {
     static char *buffer = NULL;
     static size_t buffer_size = 0;
     size_t needed = 256 + top * 256;
-    if (buffer_size < needed) { buffer = realloc(buffer, needed); buffer_size = needed; }
+    if (buffer_size < needed) {
+        char *tmp = realloc(buffer, needed);
+        if (!tmp) { free(hubs); return "{\"items\":[]}"; }
+        buffer = tmp;
+        buffer_size = needed;
+    }
 
     size_t offset = 0;
-    offset += sprintf(buffer + offset, "{\"items\":[");
+    size_t remaining = buffer_size;
+    offset += snprintf(buffer + offset, remaining, "{\"items\":[");
     for (size_t i = 0; i < top; ++i) {
         hub_t *h = &hubs[i];
-        offset += sprintf(buffer + offset,
+        remaining = buffer_size - offset;
+        offset += snprintf(buffer + offset, remaining,
             "%s{\"anchorAirport\":\"%s\",\"lat\":%.4f,\"lon\":%.4f,"
             "\"connections\":%zu,\"avgDistanceKm\":%.1f,\"score\":%.4f}",
             (i == 0 ? "" : ","),
@@ -230,7 +237,8 @@ const char* nuke_wasm_get_best_nodes_json(void) {
             g_store.airport_lon[h->idx],
             h->connections, h->avg_dist, h->score);
     }
-    sprintf(buffer + offset, "]}");
+    remaining = buffer_size - offset;
+    snprintf(buffer + offset, remaining, "]}");
     free(hubs);
     return buffer;
 }

@@ -271,8 +271,19 @@ document.addEventListener('DOMContentLoaded', () => {
   function haversineKm(lat1, lon1, lat2, lon2) {
     const toRad = v => v * Math.PI / 180;
     const dlat = toRad(lat2 - lat1), dlon = toRad(lon2 - lon1);
-    const a = Math.sin(dlat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dlon/2)**2;
+    const a = Math.pow(Math.sin(dlat/2), 2) + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.pow(Math.sin(dlon/2), 2);
     return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  // Evenly sample up to targetSize items from an array
+  function sampleArray(arr, targetSize) {
+    if (arr.length <= targetSize) return arr;
+    const step = Math.max(1, Math.floor(arr.length / targetSize));
+    const result = [];
+    for (let i = 0; i < arr.length && result.length < targetSize; i += step) {
+      result.push(arr[i]);
+    }
+    return result;
   }
 
   // Dynamically compute top-5 hub airports from actual route search data.
@@ -297,11 +308,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const gcDirect = haversineKm(srcAirport.lat, srcAirport.lon, dstAirport.lat, dstAirport.lon);
       const candidates = [];
 
-      // Sample a manageable subset — pick airports spread across the globe
       const sample = state.airports.filter(a => a.code !== from && a.code !== to);
-      // Limit to ~100 candidates for performance: pick evenly from sorted list
-      const step = Math.max(1, Math.floor(sample.length / 100));
-      const subset = sample.filter((_, i) => i % step === 0);
+      const subset = sampleArray(sample, 100);
 
       for (const hub of subset) {
         try {
@@ -329,12 +337,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Global mode: rank airports by outbound connectivity using real route searches.
     // Pick geographically diverse probe destinations and measure how many each
-    // airport can reach with actual paths (max 1 transfer).
+    // airport can reach with actual paths (max 2 transfers).
     const probes = pickProbeAirports(6);
-
-    // Sample ~100 candidate airports spread across the globe for performance
-    const sampleStep = Math.max(1, Math.floor(state.airports.length / 100));
-    const sampleAirports = state.airports.filter((_, i) => i % sampleStep === 0);
+    const sampleAirports = sampleArray(state.airports, 100);
     const scores = new Map();
 
     for (const airport of sampleAirports) {
