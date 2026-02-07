@@ -18,8 +18,8 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return r * c
 
 
-def load_airports(path: Path) -> Dict[int, Tuple[str, float, float]]:
-    airports: Dict[int, Tuple[str, float, float]] = {}
+def load_airports(path: Path) -> Dict[int, Tuple[str, float, float, str]]:
+    airports: Dict[int, Tuple[str, float, float, str]] = {}
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle)
         for row in reader:
@@ -28,15 +28,16 @@ def load_airports(path: Path) -> Dict[int, Tuple[str, float, float]]:
             try:
                 airport_id = int(row[0])
                 code = row[4].strip().upper()
+                country = row[3].strip() if len(row) > 3 else ""
                 lat = float(row[6])
                 lon = float(row[7])
             except (ValueError, IndexError):
                 continue
-            airports[airport_id] = (code, lat, lon)
+            airports[airport_id] = (code, lat, lon, country)
     return airports
 
 
-def load_routes(path: Path, airports: Dict[int, Tuple[str, float, float]]) -> List[Tuple[int, int, float]]:
+def load_routes(path: Path, airports: Dict[int, Tuple[str, float, float, str]]) -> List[Tuple[int, int, float]]:
     routes: List[Tuple[int, int, float]] = []
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle)
@@ -67,6 +68,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY,
             code TEXT NOT NULL,
             name TEXT DEFAULT '',
+            country TEXT DEFAULT '',
             latitude REAL NOT NULL,
             longitude REAL NOT NULL
         );
@@ -88,12 +90,12 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
 
 def seed_data(conn: sqlite3.Connection,
-              airports: Dict[int, Tuple[str, float, float]],
+              airports: Dict[int, Tuple[str, float, float, str]],
               routes: List[Tuple[int, int, float]]) -> None:
     cur = conn.cursor()
     cur.executemany(
-        "INSERT INTO airports (id, code, latitude, longitude) VALUES (?, ?, ?, ?);",
-        [(aid, info[0], info[1], info[2]) for aid, info in sorted(airports.items(), key=lambda kv: kv[0])],
+        "INSERT INTO airports (id, code, country, latitude, longitude) VALUES (?, ?, ?, ?, ?);",
+        [(aid, info[0], info[3], info[1], info[2]) for aid, info in sorted(airports.items(), key=lambda kv: kv[0])],
     )
     cur.executemany(
         "INSERT INTO routes (src_id, dst_id, distance_km) VALUES (?, ?, ?);",

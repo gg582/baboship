@@ -11,7 +11,7 @@ def export_airports(db_path, out_path):
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
 
-    cur.execute("SELECT id, code, latitude, longitude FROM airports ORDER BY id ASC")
+    cur.execute("SELECT id, code, latitude, longitude, COALESCE(country, '') FROM airports ORDER BY id ASC")
     airports = cur.fetchall()
     
     data = []
@@ -20,7 +20,8 @@ def export_airports(db_path, out_path):
             "id": a[0],
             "code": a[1],
             "lat": a[2],
-            "lon": a[3]
+            "lon": a[3],
+            "country": a[4]
         })
 
     with open(out_path, 'w', encoding='utf-8') as f:
