@@ -246,6 +246,7 @@ document.addEventListener('DOMContentLoaded', () => {
       `).join('') || '<div class="empty-state">경로 없음</div>';
       statusEl.textContent = `분석 완료: ${state.routes.length}개 발견`;
       drawAllScenes();
+      refreshBestHubs();
     } catch (err) { statusEl.textContent = '오류: ' + err.message; }
   }
 
@@ -266,17 +267,143 @@ document.addEventListener('DOMContentLoaded', () => {
   searchBtn.addEventListener('click', searchRoutes);
   window.addEventListener('resize', resizeAllCanvases);
 
-  // Top 5 global freight hub recommendations (excludes only KR, not all of Asia)
-  const bestNodesTop5 = [
-    {continentCode:"AS",continentLabel:"아시아",country:"일본",isoCode:"JP",anchorAirport:"NRT",avgHours:12.5,reliability:99.2,notes:"아시아 최대 화물 허브, 자동 통관 및 콜드체인 완비"},
-    {continentCode:"EU",continentLabel:"유럽",country:"독일",isoCode:"DE",anchorAirport:"FRA",avgHours:22.4,reliability:97.8,notes:"유럽 중앙 물류 거점, 의약품·전자부품 특화 창고"},
-    {continentCode:"NA",continentLabel:"북미",country:"미국",isoCode:"US",anchorAirport:"MEM",avgHours:28.1,reliability:96.5,notes:"FedEx 글로벌 슈퍼허브, 익일 배송 네트워크 중심"},
-    {continentCode:"AS",continentLabel:"아시아",country:"중국",isoCode:"CN",anchorAirport:"PVG",avgHours:14.8,reliability:95.3,notes:"자유무역구역 내 24시간 통관, 대량 화물 처리"},
-    {continentCode:"ME",continentLabel:"중동",country:"아랍에미리트",isoCode:"AE",anchorAirport:"DXB",avgHours:19.6,reliability:98.7,notes:"유럽·아프리카·아시아 3대륙 연결 중계 허브"}
-  ];
+  // Haversine distance in km between two lat/lon points
+  function haversineKm(lat1, lon1, lat2, lon2) {
+    const toRad = v => v * Math.PI / 180;
+    const dlat = toRad(lat2 - lat1), dlon = toRad(lon2 - lon1);
+    const a = Math.sin(dlat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dlon/2)**2;
+    return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  // Dynamically compute top-5 hub airports from actual route search data.
+  // When origin/destination are set, ranks hubs by best route efficiency
+  // through each candidate airport. Otherwise ranks by geographic
+  // connectivity (average reachability to a diverse set of world airports).
+  function computeBestHubs() {
+    if (!state.kernel || state.airports.length === 0) return [];
+
+    const from = fromInput.value.trim().toUpperCase();
+    const to = toInput.value.trim().toUpperCase();
+    const hasContext = from.length === 3 && to.length === 3 && from !== to;
+
+    if (hasContext) {
+      // Contextual mode: find best intermediate hubs for this specific route.
+      // For each loaded airport (that is not src/dst), search actual routes
+      // src→hub and hub→dst, combine total distance vs great-circle.
+      const srcAirport = state.airportMap.get(from);
+      const dstAirport = state.airportMap.get(to);
+      if (!srcAirport || !dstAirport) return [];
+
+      const gcDirect = haversineKm(srcAirport.lat, srcAirport.lon, dstAirport.lat, dstAirport.lon);
+      const candidates = [];
+
+      // Sample a manageable subset — pick airports spread across the globe
+      const sample = state.airports.filter(a => a.code !== from && a.code !== to);
+      // Limit to ~100 candidates for performance: pick evenly from sorted list
+      const step = Math.max(1, Math.floor(sample.length / 100));
+      const subset = sample.filter((_, i) => i % step === 0);
+
+      for (const hub of subset) {
+        try {
+          const leg1 = JSON.parse(state.kernel.searchRoutes(from, hub.code, 0));
+          const leg2 = JSON.parse(state.kernel.searchRoutes(hub.code, to, 0));
+          if (!leg1.paths?.length || !leg2.paths?.length) continue;
+          const totalDist = leg1.paths[0].totalDistanceKm + leg2.paths[0].totalDistanceKm;
+          const efficiency = gcDirect / totalDist;
+          candidates.push({
+            code: hub.code, lat: hub.lat, lon: hub.lon,
+            totalDistanceKm: totalDist, efficiency,
+            leg1Km: leg1.paths[0].totalDistanceKm,
+            leg2Km: leg2.paths[0].totalDistanceKm
+          });
+        } catch { /* skip unreachable airports */ }
+      }
+
+      candidates.sort((a, b) => b.efficiency - a.efficiency);
+      return candidates.slice(0, 5).map(c => ({
+        anchorAirport: c.code, lat: c.lat, lon: c.lon,
+        detail: `${from}→${c.code} ${c.leg1Km.toFixed(0)}km + ${c.code}→${to} ${c.leg2Km.toFixed(0)}km`,
+        metric: `총 ${c.totalDistanceKm.toFixed(0)}km · 효율 ${(c.efficiency * 100).toFixed(1)}%`
+      }));
+    }
+
+    // Global mode: rank airports by outbound connectivity using real route searches.
+    // Pick geographically diverse probe destinations and measure how many each
+    // airport can reach with actual paths (max 1 transfer).
+    const probes = pickProbeAirports(6);
+
+    // Sample ~100 candidate airports spread across the globe for performance
+    const sampleStep = Math.max(1, Math.floor(state.airports.length / 100));
+    const sampleAirports = state.airports.filter((_, i) => i % sampleStep === 0);
+    const scores = new Map();
+
+    for (const airport of sampleAirports) {
+      let reachable = 0, totalEfficiency = 0;
+      for (const probe of probes) {
+        if (probe.code === airport.code) continue;
+        try {
+          const result = JSON.parse(state.kernel.searchRoutes(airport.code, probe.code, 2));
+          if (result.paths?.length) {
+            reachable++;
+            totalEfficiency += result.paths[0].efficiency;
+          }
+        } catch { /* skip */ }
+      }
+      if (reachable > 0) {
+        scores.set(airport.code, {
+          code: airport.code, lat: airport.lat, lon: airport.lon,
+          reachable, avgEfficiency: totalEfficiency / reachable
+        });
+      }
+    }
+
+    const ranked = [...scores.values()]
+      .sort((a, b) => b.reachable - a.reachable || b.avgEfficiency - a.avgEfficiency)
+      .slice(0, 5);
+
+    return ranked.map(r => ({
+      anchorAirport: r.code, lat: r.lat, lon: r.lon,
+      detail: `${r.reachable}/${probes.length} 프로브 도달`,
+      metric: `평균 효율 ${(r.avgEfficiency * 100).toFixed(1)}%`
+    }));
+  }
+
+  // Pick geographically spread probe airports from loaded data
+  function pickProbeAirports(count) {
+    if (state.airports.length <= count) return [...state.airports];
+    // Divide world longitude into equal buckets and pick one from each
+    const buckets = Array.from({ length: count }, () => []);
+    const bucketWidth = 360 / count;
+    for (const a of state.airports) {
+      const idx = Math.min(count - 1, Math.floor((a.lon + 180) / bucketWidth));
+      buckets[idx].push(a);
+    }
+    return buckets
+      .filter(b => b.length > 0)
+      .map(b => b[Math.floor(b.length / 2)]);
+  }
 
   function renderBestNodes(items) {
-    bestContainer.innerHTML = items.map(n => `<div class="best-card-item"><div class="best-card-header"><strong>${n.anchorAirport}</strong><span class="tag">${n.continentLabel}</span></div><p>${n.country} · 평균 ${n.avgHours}h · 신뢰도 ${n.reliability}%</p><p>${n.notes}</p></div>`).join('');
+    if (!items.length) {
+      bestContainer.innerHTML = '<div class="empty-state">경로 데이터 분석 중 허브를 찾지 못했습니다.</div>';
+      return;
+    }
+    bestContainer.innerHTML = items.map((n, i) =>
+      `<div class="best-card-item">` +
+        `<div class="best-card-header"><strong>#${i+1} ${n.anchorAirport}</strong></div>` +
+        `<p>${n.detail}</p>` +
+        `<p class="best-meta">${n.metric}</p>` +
+      `</div>`
+    ).join('');
+  }
+
+  async function refreshBestHubs() {
+    bestContainer.classList.add('loading');
+    // Use setTimeout to allow the UI to update before blocking computation
+    await new Promise(r => setTimeout(r, 50));
+    const hubs = computeBestHubs();
+    renderBestNodes(hubs);
+    bestContainer.classList.remove('loading');
   }
 
   async function init() {
@@ -287,12 +414,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const h = JSON.parse(state.kernel.getHealth());
       statRoutes.textContent = h.routes_loaded.toLocaleString();
       statWorkers.textContent = 'WASM-Serverless';
-      const wasmBest = JSON.parse(state.kernel.getBest()).items;
-      renderBestNodes(wasmBest.length >= 5 ? wasmBest : bestNodesTop5);
-    } else {
-      renderBestNodes(bestNodesTop5);
+      await refreshBestHubs();
     }
   }
+
+  bestRefreshBtn.addEventListener('click', refreshBestHubs);
 
   resizeAllCanvases();
   init();

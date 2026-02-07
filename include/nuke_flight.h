@@ -23,7 +23,7 @@ typedef struct { int dummy; } ttak_mem_tree_t;
 #include <ttak/timing/timing.h>
 #endif
 
-#define NUKE_MAX_TRANSFERS 3
+#define NUKE_MAX_TRANSFERS 5
 #define NUKE_MAX_LEGS (NUKE_MAX_TRANSFERS + 1)
 #define NUKE_MAX_AIRPORTS_IN_PATH (NUKE_MAX_LEGS + 1)
 

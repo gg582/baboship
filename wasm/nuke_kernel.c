@@ -178,12 +178,59 @@ int nuke_wasm_is_valid_iata(const char *code) {
 
 WASM_KEEPALIVE
 const char* nuke_wasm_get_best_nodes_json(void) {
-    // Top 5 global freight hub recommendations (excludes user home country KR only, not all of Asia)
-    return "{\"items\":["
-        "{\"continentCode\":\"AS\",\"continentLabel\":\"아시아\",\"country\":\"일본\",\"isoCode\":\"JP\",\"anchorAirport\":\"NRT\",\"avgHours\":12.5,\"reliability\":99.2,\"notes\":\"아시아 최대 화물 허브, 자동 통관 및 콜드체인 완비\"},"
-        "{\"continentCode\":\"EU\",\"continentLabel\":\"유럽\",\"country\":\"독일\",\"isoCode\":\"DE\",\"anchorAirport\":\"FRA\",\"avgHours\":22.4,\"reliability\":97.8,\"notes\":\"유럽 중앙 물류 거점, 의약품·전자부품 특화 창고\"},"
-        "{\"continentCode\":\"NA\",\"continentLabel\":\"북미\",\"country\":\"미국\",\"isoCode\":\"US\",\"anchorAirport\":\"MEM\",\"avgHours\":28.1,\"reliability\":96.5,\"notes\":\"FedEx 글로벌 슈퍼허브, 익일 배송 네트워크 중심\"},"
-        "{\"continentCode\":\"AS\",\"continentLabel\":\"아시아\",\"country\":\"중국\",\"isoCode\":\"CN\",\"anchorAirport\":\"PVG\",\"avgHours\":14.8,\"reliability\":95.3,\"notes\":\"자유무역구역 내 24시간 통관, 대량 화물 처리\"},"
-        "{\"continentCode\":\"ME\",\"continentLabel\":\"중동\",\"country\":\"아랍에미리트\",\"isoCode\":\"AE\",\"anchorAirport\":\"DXB\",\"avgHours\":19.6,\"reliability\":98.7,\"notes\":\"유럽·아프리카·아시아 3대륙 연결 중계 허브\"}"
-    "]}";
+    if (!g_initialized || g_store.airport_count == 0)
+        return "{\"items\":[]}";
+
+    // Compute hub scores from actual route adjacency data.
+    // Score = outbound route count * (1 / average distance), so highly
+    // connected airports with shorter average legs rank higher.
+    typedef struct { size_t idx; double score; size_t connections; double avg_dist; } hub_t;
+
+    size_t n = g_store.airport_count;
+    hub_t *hubs = (hub_t *)malloc(n * sizeof(hub_t));
+    if (!hubs) return "{\"items\":[]}";
+
+    for (size_t i = 0; i < n; ++i) {
+        size_t cnt = g_store.route_counts[i];
+        double total_dist = 0.0;
+        size_t off = g_store.route_offsets[i];
+        for (size_t j = 0; j < cnt; ++j)
+            total_dist += g_store.adj_distance[off + j];
+        double avg = cnt > 0 ? total_dist / (double)cnt : 0.0;
+        hubs[i].idx = i;
+        hubs[i].connections = cnt;
+        hubs[i].avg_dist = avg;
+        hubs[i].score = cnt > 0 ? (double)cnt / (avg + 1.0) : 0.0;
+    }
+
+    // Partial selection sort for top 5
+    size_t top = n < 5 ? n : 5;
+    for (size_t i = 0; i < top; ++i) {
+        size_t best = i;
+        for (size_t j = i + 1; j < n; ++j)
+            if (hubs[j].score > hubs[best].score) best = j;
+        if (best != i) { hub_t tmp = hubs[i]; hubs[i] = hubs[best]; hubs[best] = tmp; }
+    }
+
+    static char *buffer = NULL;
+    static size_t buffer_size = 0;
+    size_t needed = 256 + top * 256;
+    if (buffer_size < needed) { buffer = realloc(buffer, needed); buffer_size = needed; }
+
+    size_t offset = 0;
+    offset += sprintf(buffer + offset, "{\"items\":[");
+    for (size_t i = 0; i < top; ++i) {
+        hub_t *h = &hubs[i];
+        offset += sprintf(buffer + offset,
+            "%s{\"anchorAirport\":\"%s\",\"lat\":%.4f,\"lon\":%.4f,"
+            "\"connections\":%zu,\"avgDistanceKm\":%.1f,\"score\":%.4f}",
+            (i == 0 ? "" : ","),
+            g_store.airport_codes[h->idx],
+            g_store.airport_lat[h->idx],
+            g_store.airport_lon[h->idx],
+            h->connections, h->avg_dist, h->score);
+    }
+    sprintf(buffer + offset, "]}");
+    free(hubs);
+    return buffer;
 }
