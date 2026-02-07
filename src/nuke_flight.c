@@ -658,6 +658,8 @@ static void *worker_loop(void *arg) {
 static int compare_efficiency(const void *a, const void *b) {
     const nuke_path_result_t *pa = a;
     const nuke_path_result_t *pb = b;
+    if (pa->hops < pb->hops) return -1;
+    if (pa->hops > pb->hops) return 1;
     if (pa->efficiency < pb->efficiency) return 1;
     if (pa->efficiency > pb->efficiency) return -1;
     if (pa->total_distance_km > pb->total_distance_km) return 1;
