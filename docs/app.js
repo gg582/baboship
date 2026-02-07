@@ -52,8 +52,10 @@ async function initWasm() {
     
     if (state.kernel._malloc) {
       const ptr = state.kernel._malloc(uint8Array.length);
-      const heapu8 = state.kernel.HEAPU8 || new Uint8Array(state.kernel.wasmMemory?.buffer || state.kernel.buffer);
-      heapu8.set(uint8Array, ptr);
+      if (!state.kernel.HEAPU8) {
+        throw new Error('HEAPU8 is not available on WASM module');
+      }
+      state.kernel.HEAPU8.set(uint8Array, ptr);
       state.kernel.loadData(ptr, uint8Array.length);
       state.kernel._free(ptr);
     } else {
