@@ -178,8 +178,67 @@ int nuke_wasm_is_valid_iata(const char *code) {
 
 WASM_KEEPALIVE
 const char* nuke_wasm_get_best_nodes_json(void) {
-    // For now keep this mocked as it's more like static content
-    return "{\"items\":["
-        "{\"continentCode\":\"AS\",\"continentLabel\":\"아시아\",\"country\":\"대한민국\",\"isoCode\":\"KR\",\"anchorAirport\":\"ICN\",\"avgHours\":16.2,\"reliability\":98.1,\"notes\":\"24시간 통관과 저온 물류 창고를 동시에 운영\"}"
-    "]}";
+    if (!g_initialized || g_store.airport_count == 0)
+        return "{\"items\":[]}";
+
+    // Compute hub scores from actual route adjacency data.
+    // Score = outbound route count * (1 / average distance), so highly
+    // connected airports with shorter average legs rank higher.
+    typedef struct { size_t idx; double score; size_t connections; double avg_dist; } hub_t;
+
+    size_t n = g_store.airport_count;
+    hub_t *hubs = (hub_t *)malloc(n * sizeof(hub_t));
+    if (!hubs) return "{\"items\":[]}";
+
+    for (size_t i = 0; i < n; ++i) {
+        size_t cnt = g_store.route_counts[i];
+        double total_dist = 0.0;
+        size_t off = g_store.route_offsets[i];
+        for (size_t j = 0; j < cnt; ++j)
+            total_dist += g_store.adj_distance[off + j];
+        double avg = cnt > 0 ? total_dist / (double)cnt : 0.0;
+        hubs[i].idx = i;
+        hubs[i].connections = cnt;
+        hubs[i].avg_dist = avg;
+        hubs[i].score = cnt > 0 ? (double)cnt / (avg + 1.0) : 0.0;
+    }
+
+    // Partial selection sort for top 5
+    size_t top = n < 5 ? n : 5;
+    for (size_t i = 0; i < top; ++i) {
+        size_t best = i;
+        for (size_t j = i + 1; j < n; ++j)
+            if (hubs[j].score > hubs[best].score) best = j;
+        if (best != i) { hub_t tmp = hubs[i]; hubs[i] = hubs[best]; hubs[best] = tmp; }
+    }
+
+    static char *buffer = NULL;
+    static size_t buffer_size = 0;
+    size_t needed = 256 + top * 256;
+    if (buffer_size < needed) {
+        char *tmp = realloc(buffer, needed);
+        if (!tmp) { free(hubs); return "{\"items\":[]}"; }
+        buffer = tmp;
+        buffer_size = needed;
+    }
+
+    size_t offset = 0;
+    size_t remaining = buffer_size;
+    offset += snprintf(buffer + offset, remaining, "{\"items\":[");
+    for (size_t i = 0; i < top; ++i) {
+        hub_t *h = &hubs[i];
+        remaining = buffer_size - offset;
+        offset += snprintf(buffer + offset, remaining,
+            "%s{\"anchorAirport\":\"%s\",\"lat\":%.4f,\"lon\":%.4f,"
+            "\"connections\":%zu,\"avgDistanceKm\":%.1f,\"score\":%.4f}",
+            (i == 0 ? "" : ","),
+            g_store.airport_codes[h->idx],
+            g_store.airport_lat[h->idx],
+            g_store.airport_lon[h->idx],
+            h->connections, h->avg_dist, h->score);
+    }
+    remaining = buffer_size - offset;
+    snprintf(buffer + offset, remaining, "]}");
+    free(hubs);
+    return buffer;
 }

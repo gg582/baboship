@@ -1,78 +1,50 @@
-# 바보쉽: 바보같은 해외 배송? 한 눈에 예상하세요
+# 바보쉽 — 해외 직구, 최단 경로로 받으세요
 
-해외 직구를 할 때에, 미국에서 시킨 택배가 유럽을 거쳐 오거나, 남미에서 시킨 택배가 굳이 미국으로 갔다가 오거나...비슷한 경험이 많으시죠?
-바보쉽은 똑똑한 경로를 찾아서 애초부터 좋은 직구 위치를 고를 수 있게 도와주고, 또한 이미 시켜버린 택배는 어떤 경로를 거쳐서 오는지 데이터베이스에서 꺼내서 시각화해 줍니다.
-이제 망설이지 말고 직구하세요!
+- 미국에서 시킨 택배가 왜 유럽을 거쳐 올까요?  
+- 남미 직구인데 왜 미국으로 돌아가서 올까요?
 
-## 기능
+**바보쉽**은 전 세계 7,600개 이상의 공항과 66,000개 이상의 실제 항공 노선 데이터를 실시간으로 분석하여, 해외 직구 시 가장 빠르고 효율적인 배송 경로를 찾아드립니다.
 
-- 6000여 개 이상의 공항 정보와 7만여 개의 경로 데이터
-- 경로 효율성을 통해 처음부터 좋은 구매지를 대륙별로 추천
-- 언제나 적당히 빠른 안정적인 웹사이트
-- 지도와 공항 이름을 통한 공항 선택 서비스
+---
 
-## 구성 요소
+## 어떻게 도움이 되나요?
 
-- `src/nuke_flight.c`: 공항·노선 데이터를 수직 배열(Vertical Arrays)에 적재하고, CWIST IO 큐(worker) + libttak 메모리 제어로 최대 3회 환승까지 스택 기반 탐색을 수행합니다.
-- `src/server.c`: CWIST HTTP 레이어. `/routes`와 `/health` 엔드포인트를 제공하며, CWIST 일반 DB(`data/meta.db`)를 통해 검색 감사 로그를 남깁니다.
-- `scripts/create_sample_db.py`: 즉시 실행 가능한 샘플 NukeDB 생성기.
-- `scripts/download_openflights.py`: OpenFlights 원본 CSV를 `data/raw`에 내려받는 표준 라이브러리 기반 스크립트.
-- `scripts/ingest_openflights.py`: OpenFlights CSV를 Nuke 포맷으로 변환하는 오프라인 툴.
-- `docs/DATA_SETUP.md`: 실제 데이터를 내려받지 못할 때의 수동 배치 절차.
+### 직구 전 - 어디서 살지 정해드립니다
+같은 상품이 여러 국가에서 판매될 때, 어느 국가에서 주문해야 가장 빨리 도착하는지 경로 효율을 비교해 보세요. 바보쉽이 실제 항공 네트워크를 분석해 **최적 출발지**를 추천합니다.
 
-## 빌드 & 실행
+### 직구 후 - 내 택배가 어디로 가는지 보여드립니다
+이미 주문했다면? 출발지와 도착지를 입력하면 실제 항공 화물이 거쳐가는 **환승 경로를 시각화**합니다. 최대 5회 환승까지 탐색하며, 각 경로의 총 거리와 효율을 한눈에 비교할 수 있습니다.
 
-1. **의존성 컴파일**
-   ```bash
-   make deps
-   ```
-   - `lib/libttak` → libttak 메모리 관리자
-   - `lib/cwist` → CWIST 웹 프레임워크 (내부 SQLite + cwist_io 포함)
+### 최적 허브 Top 5 - 데이터가 말해줍니다
+특정 경로를 입력하면, 해당 구간에서 가장 효율적인 **중간 허브 공항 Top 5**를 실제 경로 데이터 기반으로 자동 계산합니다. 고정된 추천이 아니라, 출발지·도착지에 따라 매번 달라지는 동적 분석 결과입니다.
 
-2. **데이터 준비**
-   - 빠른 확인: `python3 scripts/create_sample_db.py`
-   - 실제 운용: `python3 scripts/download_openflights.py --dest data/raw` → `python3 scripts/ingest_openflights.py ...`
-   - 옵션/수동 경로는 `docs/DATA_SETUP.md` 참고
+---
 
-3. **앱 빌드**
-   ```bash
-   make          # nukedb_app 생성
-   ```
+## 지금 바로 사용해 보세요
 
-4. **실행**
-   ```bash
-   ./nukedb_app          # 기본 포트 8080
-   PORT=9090 ./nukedb_app  # 포트 변경
-   ```
-   - 환경 변수 `NUKE_DB_PATH`, `META_DB_PATH`로 DB 위치를 재정의할 수 있습니다.
+**[바보쉽 라우트 콘솔 열기 →](https://gg582.github.io/baboship/)**
 
-## API
+- 지도에서 클릭하거나 IATA 코드를 입력하세요
+- ⚡ WebAssembly 엔진이 브라우저에서 직접 경로를 계산합니다
+- 서버 없이, 설치 없이, 오프라인에서도 작동합니다
 
-- `GET /health`  
-  엔진 상태, 로드된 공항/노선 수, 워커 수 등을 반환합니다.
-- `GET /routes?from=JFK&to=LHR&maxTransfers=3&maxResults=8`  
-  최대 3회 환승, 8개의 최적 경로를 탐색합니다. Great Circle 대비 효율, 누적 거리, 공항 목록을 JSON으로 돌려줍니다.
+---
 
-## 데이터베이스 전략
+## 이런 분들에게 추천합니다
 
-- `data/nuke_routes.db`는 **cwist_nuke_init**으로 적재하여 전량 메모리 상주 + 디스크 동기화를 유지합니다.
-- `data/meta.db`는 **CWIST 일반 DB**만 사용하여 감사 로그, 설정 등 소용량 정보를 처리합니다.
+| 사용자 | 활용 방법 |
+|--------|----------|
+| 해외 직구 쇼퍼 | 같은 상품, 어느 국가에서 사야 빠를지 비교 |
+| 셀러·리셀러 | 해외 공급처에서 국내까지 최적 물류 경로 설계 |
+| 소규모 수출입 사업자 | 신규 거래선 물류 비용·시간 사전 검토 |
+| ✈항공 물류 관심자 | 글로벌 항공 네트워크 데이터 탐색·시각화 |
 
-두 엔진 모두 `make`만으로 준비할 수 있으며, 네트워크 접근이 어려운 환경에서도 `scripts/create_sample_db.py` 덕분에 즉시 애플리케이션을 기동할 수 있습니다. 이후 필요 시 수동으로 OpenFlights 데이터를 내려받아 Nuke 포맷으로 재배치하면 됩니다.
+---
 
-## WebAssembly 빌드
+## 주요 수치
 
-- `make wasm`  
-  `wasm/nuke_kernel.c`를 `emcc`로 컴파일하여 `dist/wasm/nuke_kernel.{js,wasm}` 모듈을 생성합니다. 모듈은 대권거리, 경로 누적 거리, 효율 계산 함수를 WebAssembly로 제공합니다.
-- `make wasm_clean`  
-  WebAssembly 산출물(`build/wasm`, `dist/wasm`)을 정리합니다.
-
-```js
-import createNukeKernel from './dist/wasm/nuke_kernel.js';
-
-const kernel = await createNukeKernel();
-const gc = kernel._nuke_wasm_gc_distance(37.466, 126.440, 50.037, 8.562);
-
-// lat/lon 쌍(double) 버퍼를 만든 뒤 모듈 메모리에 복사하면
-// nuke_wasm_route_distance 호출로 총 거리를 얻을 수 있습니다.
-```
+- **7,698개** 글로벌 공항 데이터
+- **66,771개** 실제 항공 노선
+- **최대 5회 환승** 경로 탐색
+- **WebAssembly** 기반 클라이언트 사이드 연산
+- **100% 오프라인** 지원 (Service Worker)
