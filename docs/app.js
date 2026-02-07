@@ -116,8 +116,74 @@ document.addEventListener('DOMContentLoaded', () => {
   const modalCanvas = document.getElementById('route-map-large');
   const modalCloseBtn = document.getElementById('map-modal-close');
 
-  const projectPoint = (lon, lat) => ({ u: (lon + 180) / 360, v: (90 - lat) / 180 });
-  const view = { zoom: 1, minZoom: 1, maxZoom: 5, centerX: 0.5, centerY: 0.5 };
+  const projectPoint = (lon, lat) => {
+    const u = (lon + 180) / 360;
+    const clampedLat = Math.max(-85.051129, Math.min(85.051129, lat));
+    const latRad = clampedLat * Math.PI / 180;
+    const v = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2;
+    return { u, v };
+  };
+  const view = { zoom: 1, minZoom: 1, maxZoom: 18, centerX: 0.5, centerY: 0.5 };
+
+  // --- OpenStreetMap tile layer ---
+  const tileCache = new Map();
+
+  function getTileImage(z, x, y) {
+    const key = `${z}/${x}/${y}`;
+    if (tileCache.has(key)) return tileCache.get(key);
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    const entry = { img, loaded: false };
+    img.onload = () => { entry.loaded = true; drawAllScenes(); };
+    img.onerror = () => { entry.loaded = false; };
+    img.src = `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+    tileCache.set(key, entry);
+    // Evict old entries when cache grows too large
+    if (tileCache.size > 600) {
+      const first = tileCache.keys().next().value;
+      tileCache.delete(first);
+    }
+    return entry;
+  }
+
+  function drawTiles(ctx, canvas, viewport) {
+    // Determine OSM zoom level from our continuous zoom
+    const osmZoom = Math.max(0, Math.min(18, Math.round(Math.log2(view.zoom) + 1)));
+    const numTiles = Math.pow(2, osmZoom);
+
+    // Visible range in tile coords
+    const tileLeft = Math.floor(viewport.left * numTiles);
+    const tileRight = Math.ceil((viewport.left + viewport.width) * numTiles);
+    const tileTop = Math.floor(viewport.top * numTiles);
+    const tileBottom = Math.ceil((viewport.top + viewport.height) * numTiles);
+
+    for (let tx = tileLeft; tx < tileRight; tx++) {
+      for (let ty = tileTop; ty < tileBottom; ty++) {
+        // Wrap horizontally, skip out-of-range vertically
+        const wrappedX = ((tx % numTiles) + numTiles) % numTiles;
+        if (ty < 0 || ty >= numTiles) continue;
+
+        const entry = getTileImage(osmZoom, wrappedX, ty);
+        // Tile bounds in [0,1] world space
+        const tileU = tx / numTiles;
+        const tileV = ty / numTiles;
+        const tileSizeU = 1 / numTiles;
+        const tileSizeV = 1 / numTiles;
+
+        const sx = ((tileU - viewport.left) / viewport.width) * canvas.width;
+        const sy = ((tileV - viewport.top) / viewport.height) * canvas.height;
+        const sw = (tileSizeU / viewport.width) * canvas.width;
+        const sh = (tileSizeV / viewport.height) * canvas.height;
+
+        if (entry.loaded) {
+          ctx.drawImage(entry.img, sx, sy, sw, sh);
+        } else {
+          ctx.fillStyle = '#1a1a2e';
+          ctx.fillRect(sx, sy, sw, sh);
+        }
+      }
+    }
+  }
   let statusBeforeModal = '';
   const dragState = { active: false, pointerId: null, lastX: 0, lastY: 0, moved: false, blockClick: false };
   const mapCanvases = new Map();
@@ -160,15 +226,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const { ctx, canvas } = target; if (!canvas.width) return;
     const viewport = getViewWindow();
     ctx.fillStyle = '#02142f'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = 'rgba(110,231,255,0.2)'; ctx.lineWidth = 1.2;
-    continentShapes.forEach(shape => {
-      ctx.beginPath();
-      shape.forEach(([lon, lat], i) => {
-        const p = projectPoint(lon, lat); const c = worldToCanvas(p.u, p.v, viewport, canvas);
-        if (i === 0) ctx.moveTo(c.x, c.y); else ctx.lineTo(c.x, c.y);
-      });
-      ctx.closePath(); ctx.stroke();
-    });
+    // Draw OSM tile layer
+    drawTiles(ctx, canvas, viewport);
     state.airports.forEach(a => {
       const c = worldToCanvas(a.u, a.v, viewport, canvas);
       const sel = (state.selection.from?.code === a.code || state.selection.to?.code === a.code);
@@ -204,7 +263,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // when the service worker is not yet controlling this page (first visit).
       const swControlling = !!navigator.serviceWorker?.controller;
       if (swControlling) {
-        const response = await fetch('./airports?limit=1024');
+        const response = await fetch('./airports?limit=8192');
         if (response.ok) {
           const ct = response.headers.get('content-type') || '';
           if (ct.includes('application/json')) {
@@ -216,7 +275,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const response = await fetch('./airports.json');
         if (!response.ok) throw new Error('공항 데이터를 불러오지 못했습니다.');
         const allAirports = await response.json();
-        data = { airports: allAirports.slice(0, 1024) };
+        data = { airports: allAirports.slice(0, 8192) };
       }
       const airports = Array.isArray(data.airports) ? data.airports : [];
       state.airports = airports.map(a => ({ ...a, ...projectPoint(a.lon, a.lat) }));
@@ -254,7 +313,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (dragState.blockClick) return;
     const rect = canvas.getBoundingClientRect();
     const world = canvasToWorld((e.clientX - rect.left)/rect.width, (e.clientY - rect.top)/rect.height, getViewWindow());
-    const lon = world.u * 360 - 180, lat = 90 - world.v * 180;
+    const lon = world.u * 360 - 180;
+    const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * world.v)));
+    const lat = latRad * 180 / Math.PI;
     let best = null, minDist = Infinity;
     state.airports.forEach(a => {
       const d = Math.pow(a.lat-lat, 2) + Math.pow(a.lon-lon, 2);
