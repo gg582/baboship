@@ -178,8 +178,12 @@ int nuke_wasm_is_valid_iata(const char *code) {
 
 WASM_KEEPALIVE
 const char* nuke_wasm_get_best_nodes_json(void) {
-    // For now keep this mocked as it's more like static content
+    // Top 5 global freight hub recommendations (excludes user home country KR only, not all of Asia)
     return "{\"items\":["
-        "{\"continentCode\":\"AS\",\"continentLabel\":\"아시아\",\"country\":\"대한민국\",\"isoCode\":\"KR\",\"anchorAirport\":\"ICN\",\"avgHours\":16.2,\"reliability\":98.1,\"notes\":\"24시간 통관과 저온 물류 창고를 동시에 운영\"}"
+        "{\"continentCode\":\"AS\",\"continentLabel\":\"아시아\",\"country\":\"일본\",\"isoCode\":\"JP\",\"anchorAirport\":\"NRT\",\"avgHours\":12.5,\"reliability\":99.2,\"notes\":\"아시아 최대 화물 허브, 자동 통관 및 콜드체인 완비\"},"
+        "{\"continentCode\":\"EU\",\"continentLabel\":\"유럽\",\"country\":\"독일\",\"isoCode\":\"DE\",\"anchorAirport\":\"FRA\",\"avgHours\":22.4,\"reliability\":97.8,\"notes\":\"유럽 중앙 물류 거점, 의약품·전자부품 특화 창고\"},"
+        "{\"continentCode\":\"NA\",\"continentLabel\":\"북미\",\"country\":\"미국\",\"isoCode\":\"US\",\"anchorAirport\":\"MEM\",\"avgHours\":28.1,\"reliability\":96.5,\"notes\":\"FedEx 글로벌 슈퍼허브, 익일 배송 네트워크 중심\"},"
+        "{\"continentCode\":\"AS\",\"continentLabel\":\"아시아\",\"country\":\"중국\",\"isoCode\":\"CN\",\"anchorAirport\":\"PVG\",\"avgHours\":14.8,\"reliability\":95.3,\"notes\":\"자유무역구역 내 24시간 통관, 대량 화물 처리\"},"
+        "{\"continentCode\":\"ME\",\"continentLabel\":\"중동\",\"country\":\"아랍에미리트\",\"isoCode\":\"AE\",\"anchorAirport\":\"DXB\",\"avgHours\":19.6,\"reliability\":98.7,\"notes\":\"유럽·아프리카·아시아 3대륙 연결 중계 허브\"}"
     "]}";
 }
