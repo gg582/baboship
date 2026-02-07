@@ -120,7 +120,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const swapBtn = document.getElementById('swap-btn');
   const searchBtn = document.getElementById('search-btn');
   const modeButtons = document.querySelectorAll('.map-mode button');
-  const bestContainer = document.getElementById('best-results');
+  const bestFromSection = document.getElementById('best-from-section');
+  const bestToSection = document.getElementById('best-to-section');
+  const bestFromTitle = document.getElementById('best-from-title');
+  const bestToTitle = document.getElementById('best-to-title');
+  const bestFromResults = document.getElementById('best-from-results');
+  const bestToResults = document.getElementById('best-to-results');
   const bestRefreshBtn = document.getElementById('best-refresh-btn');
   const mapModal = document.getElementById('map-modal');
   const modalCanvas = document.getElementById('route-map-large');
@@ -354,7 +359,7 @@ document.addEventListener('DOMContentLoaded', () => {
     state.selection[field] = airport;
     updateSelectionLabels();
     drawAllScenes();
-    renderBest(state.best);
+    refreshBestSections();
   }
 
   function nearestAirport(lat, lon) {
@@ -560,54 +565,125 @@ document.addEventListener('DOMContentLoaded', () => {
     drawAllScenes();
   }
 
-  function renderBest(nodes) {
-    bestContainer.innerHTML = '';
-    const excludeAirports = new Set();
-    if (state.selection.from) {
-      excludeAirports.add(state.selection.from.code);
+  function getContinent(lat, lon) {
+    if (lat >= 7 && lat <= 84 && lon >= -170 && lon <= -50) return '북미';
+    if (lat < 7 && lat >= -60 && lon >= -100 && lon <= -30) return '남미';
+    if (lat < -15 && lon >= 100 && lon <= 180) return '오세아니아';
+    if (lat >= 35 && lon >= -15 && lon <= 60) return '유럽';
+    if (lat < 35 && lat >= -40 && lon >= -20 && lon <= 55) return '아프리카';
+    if (lat >= -15 && lon >= 25 && lon <= 55) return '중동';
+    if (lat >= -15 && lon > 55 && lon <= 180) return '아시아';
+    if (lat >= 5 && lon >= 25 && lon <= 180) return '아시아';
+    return '기타';
+  }
+
+  function computeBestDestinations(originCode) {
+    if (!state.kernel || state.airports.length === 0) return {};
+    const origin = state.airportMap.get(originCode);
+    if (!origin) return {};
+    const candidates = state.airports.filter(a => a.code !== originCode);
+    const sample = candidates.length > 200
+      ? candidates.filter((_, i) => i % Math.ceil(candidates.length / 200) === 0)
+      : candidates;
+    const continentResults = {};
+    for (const dest of sample) {
+      try {
+        const result = JSON.parse(state.kernel.searchRoutes(originCode, dest.code, 2));
+        if (!result.paths || !result.paths.length) continue;
+        const path = result.paths[0];
+        const continent = getContinent(dest.lat, dest.lon);
+        if (!continentResults[continent]) continentResults[continent] = [];
+        continentResults[continent].push({
+          code: dest.code,
+          lat: dest.lat,
+          lon: dest.lon,
+          distanceKm: path.totalDistanceKm,
+          efficiency: path.efficiency,
+          hops: path.hops || path.legs || 0,
+          route: path.airports ? path.airports.map(a => a.code).join(' → ') : originCode + ' → ' + dest.code
+        });
+      } catch { /* skip */ }
     }
-    if (state.selection.to) {
-      excludeAirports.add(state.selection.to.code);
+    for (const continent of Object.keys(continentResults)) {
+      continentResults[continent].sort((a, b) => b.efficiency - a.efficiency);
+      continentResults[continent] = continentResults[continent].slice(0, 3);
     }
-    const filtered = Array.isArray(nodes)
-      ? nodes.filter(node => node && !excludeAirports.has(node.anchorAirport))
-      : [];
-    if (!filtered.length) {
+    return continentResults;
+  }
+
+  function renderBestDestinations(container, data) {
+    container.innerHTML = '';
+    container.className = 'best-continent-container';
+    const continents = Object.keys(data);
+    if (!continents.length) {
       const empty = document.createElement('div');
       empty.className = 'empty-state';
-      empty.textContent = '조건에 맞는 추천이 없습니다.';
-      bestContainer.appendChild(empty);
+      empty.textContent = '목적지를 찾을 수 없습니다.';
+      container.appendChild(empty);
       return;
     }
-    filtered.forEach(node => {
-      const card = document.createElement('article');
-      card.className = 'best-card-item';
-      const header = document.createElement('div');
-      header.className = 'best-card-header';
-      const continent = document.createElement('strong');
-      continent.textContent = node.continentLabel + ' · ' + node.country;
-      header.appendChild(continent);
-      card.appendChild(header);
-
-      const body = document.createElement('p');
-      body.textContent = node.notes;
-      card.appendChild(body);
-
-      const meta = document.createElement('div');
-      meta.className = 'best-meta';
-      const hours = document.createElement('span');
-      hours.textContent = '평균 리드타임 ' + node.avgHours.toFixed(1) + 'h';
-      const reliability = document.createElement('span');
-      reliability.textContent = '신뢰도 ' + node.reliability.toFixed(1) + '%';
-      const anchor = document.createElement('span');
-      anchor.textContent = '대표 공항 ' + node.anchorAirport;
-      meta.appendChild(hours);
-      meta.appendChild(reliability);
-      meta.appendChild(anchor);
-      card.appendChild(meta);
-
-      bestContainer.appendChild(card);
+    continents.forEach(continent => {
+      const group = document.createElement('div');
+      group.className = 'best-continent-group';
+      const header = document.createElement('h3');
+      header.className = 'best-continent-header';
+      header.textContent = continent;
+      group.appendChild(header);
+      const grid = document.createElement('div');
+      grid.className = 'best-grid';
+      data[continent].forEach((dest, i) => {
+        const card = document.createElement('article');
+        card.className = 'best-card-item';
+        const cardHeader = document.createElement('div');
+        cardHeader.className = 'best-card-header';
+        const strong = document.createElement('strong');
+        strong.textContent = '#' + (i + 1) + ' ' + dest.code;
+        cardHeader.appendChild(strong);
+        card.appendChild(cardHeader);
+        const body = document.createElement('p');
+        body.textContent = dest.route;
+        card.appendChild(body);
+        const meta = document.createElement('div');
+        meta.className = 'best-meta';
+        const dist = document.createElement('span');
+        dist.textContent = dest.distanceKm.toFixed(0) + ' km';
+        const eff = document.createElement('span');
+        eff.textContent = '효율 ' + (dest.efficiency * 100).toFixed(1) + '%';
+        meta.appendChild(dist);
+        meta.appendChild(eff);
+        card.appendChild(meta);
+        grid.appendChild(card);
+      });
+      group.appendChild(grid);
+      container.appendChild(group);
     });
+  }
+
+  async function refreshBestSections() {
+    const fromCode = fromInput.value.trim().toUpperCase();
+    const toCode = toInput.value.trim().toUpperCase();
+    if (fromCode.length === 3 && state.airportMap.has(fromCode)) {
+      bestFromSection.style.display = '';
+      bestFromTitle.textContent = fromCode + '에서 최적 목적지';
+      bestFromResults.classList.add('loading');
+      await new Promise(r => setTimeout(r, 30));
+      const fromData = computeBestDestinations(fromCode);
+      renderBestDestinations(bestFromResults, fromData);
+      bestFromResults.classList.remove('loading');
+    } else {
+      bestFromSection.style.display = 'none';
+    }
+    if (toCode.length === 3 && state.airportMap.has(toCode)) {
+      bestToSection.style.display = '';
+      bestToTitle.textContent = toCode + '에서 최적 목적지';
+      bestToResults.classList.add('loading');
+      await new Promise(r => setTimeout(r, 30));
+      const toData = computeBestDestinations(toCode);
+      renderBestDestinations(bestToResults, toData);
+      bestToResults.classList.remove('loading');
+    } else {
+      bestToSection.style.display = 'none';
+    }
   }
 
   async function fetchAirports() {
@@ -717,25 +793,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function fetchBest() {
-    bestContainer.classList.add('loading');
-    fetch('./best')
-      .then(async res => {
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || '추천 정보를 불러오지 못했습니다.');
-        }
-        return data;
-      })
-      .then(data => {
-        state.best = data.items || [];
-        renderBest(state.best);
-      })
-      .catch(() => {
-        renderBest([]);
-      })
-      .finally(() => {
-        bestContainer.classList.remove('loading');
-      });
+    refreshBestSections();
   }
 
   swapBtn.addEventListener('click', () => {
@@ -775,7 +833,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   searchBtn.addEventListener('click', searchRoutes);
   window.addEventListener('resize', resizeAllCanvases);
-  bestRefreshBtn.addEventListener('click', fetchBest);
+  bestRefreshBtn.addEventListener('click', refreshBestSections);
 
   async function init() {
     await initWasm();

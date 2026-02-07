@@ -110,7 +110,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const swapBtn = document.getElementById('swap-btn');
   const searchBtn = document.getElementById('search-btn');
   const modeButtons = document.querySelectorAll('.map-mode button');
-  const bestContainer = document.getElementById('best-results');
+  const bestFromSection = document.getElementById('best-from-section');
+  const bestToSection = document.getElementById('best-to-section');
+  const bestFromTitle = document.getElementById('best-from-title');
+  const bestToTitle = document.getElementById('best-to-title');
+  const bestFromResults = document.getElementById('best-from-results');
+  const bestToResults = document.getElementById('best-to-results');
   const bestRefreshBtn = document.getElementById('best-refresh-btn');
   const mapModal = document.getElementById('map-modal');
   const modalCanvas = document.getElementById('route-map-large');
@@ -263,6 +268,7 @@ document.addEventListener('DOMContentLoaded', () => {
     selectionFrom.textContent = state.selection.from?.code || '--';
     selectionTo.textContent = state.selection.to?.code || '--';
     drawAllScenes();
+    refreshBestSections();
   }
 
   async function fetchAirports() {
@@ -315,7 +321,7 @@ document.addEventListener('DOMContentLoaded', () => {
       `).join('') || '<div class="empty-state">경로 없음</div>';
       statusEl.textContent = `분석 완료: ${state.routes.length}개 발견`;
       drawAllScenes();
-      refreshBestHubs();
+      refreshBestSections();
     } catch (err) { statusEl.textContent = '오류: ' + err.message; }
   }
 
@@ -399,148 +405,125 @@ document.addEventListener('DOMContentLoaded', () => {
   searchBtn.addEventListener('click', searchRoutes);
   window.addEventListener('resize', resizeAllCanvases);
 
-  // Haversine distance in km between two lat/lon points
-  function haversineKm(lat1, lon1, lat2, lon2) {
-    const toRad = v => v * Math.PI / 180;
-    const dlat = toRad(lat2 - lat1), dlon = toRad(lon2 - lon1);
-    const a = Math.pow(Math.sin(dlat/2), 2) + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.pow(Math.sin(dlon/2), 2);
-    return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  function getContinent(lat, lon) {
+    if (lat >= 7 && lat <= 84 && lon >= -170 && lon <= -50) return '북미';
+    if (lat < 7 && lat >= -60 && lon >= -100 && lon <= -30) return '남미';
+    if (lat < -15 && lon >= 100 && lon <= 180) return '오세아니아';
+    if (lat >= 35 && lon >= -15 && lon <= 60) return '유럽';
+    if (lat < 35 && lat >= -40 && lon >= -20 && lon <= 55) return '아프리카';
+    if (lat >= -15 && lon >= 25 && lon <= 55) return '중동';
+    if (lat >= -15 && lon > 55 && lon <= 180) return '아시아';
+    if (lat >= 5 && lon >= 25 && lon <= 180) return '아시아';
+    return '기타';
   }
 
-  // Evenly sample up to targetSize items from an array
-  function sampleArray(arr, targetSize) {
-    if (arr.length <= targetSize) return arr;
-    const step = Math.max(1, Math.floor(arr.length / targetSize));
-    const result = [];
-    for (let i = 0; i < arr.length && result.length < targetSize; i += step) {
-      result.push(arr[i]);
-    }
-    return result;
-  }
-
-  // Dynamically compute top-5 hub airports from actual route search data.
-  // When origin/destination are set, ranks hubs by best route efficiency
-  // through each candidate airport. Otherwise ranks by geographic
-  // connectivity (average reachability to a diverse set of world airports).
-  function computeBestHubs() {
-    if (!state.kernel || state.airports.length === 0) return [];
-
-    const from = fromInput.value.trim().toUpperCase();
-    const to = toInput.value.trim().toUpperCase();
-    const hasContext = from.length === 3 && to.length === 3 && from !== to;
-
-    if (hasContext) {
-      // Contextual mode: find best intermediate hubs for this specific route.
-      // For each loaded airport (that is not src/dst), search actual routes
-      // src→hub and hub→dst, combine total distance vs great-circle.
-      const srcAirport = state.airportMap.get(from);
-      const dstAirport = state.airportMap.get(to);
-      if (!srcAirport || !dstAirport) return [];
-
-      const gcDirect = haversineKm(srcAirport.lat, srcAirport.lon, dstAirport.lat, dstAirport.lon);
-      const candidates = [];
-
-      const sample = state.airports.filter(a => a.code !== from && a.code !== to);
-      const subset = sampleArray(sample, 100);
-
-      for (const hub of subset) {
-        try {
-          const leg1 = JSON.parse(state.kernel.searchRoutes(from, hub.code, 0));
-          const leg2 = JSON.parse(state.kernel.searchRoutes(hub.code, to, 0));
-          if (!leg1.paths?.length || !leg2.paths?.length) continue;
-          const totalDist = leg1.paths[0].totalDistanceKm + leg2.paths[0].totalDistanceKm;
-          const efficiency = gcDirect / totalDist;
-          candidates.push({
-            code: hub.code, lat: hub.lat, lon: hub.lon,
-            totalDistanceKm: totalDist, efficiency,
-            leg1Km: leg1.paths[0].totalDistanceKm,
-            leg2Km: leg2.paths[0].totalDistanceKm
-          });
-        } catch { /* skip unreachable airports */ }
-      }
-
-      candidates.sort((a, b) => b.efficiency - a.efficiency);
-      return candidates.slice(0, 5).map(c => ({
-        anchorAirport: c.code, lat: c.lat, lon: c.lon,
-        detail: `${from}→${c.code} ${c.leg1Km.toFixed(0)}km + ${c.code}→${to} ${c.leg2Km.toFixed(0)}km`,
-        metric: `총 ${c.totalDistanceKm.toFixed(0)}km · 효율 ${(c.efficiency * 100).toFixed(1)}%`
-      }));
-    }
-
-    // Global mode: rank airports by outbound connectivity using real route searches.
-    // Pick geographically diverse probe destinations and measure how many each
-    // airport can reach with actual paths (max 2 transfers).
-    const probes = pickProbeAirports(6);
-    const sampleAirports = sampleArray(state.airports, 100);
-    const scores = new Map();
-
-    for (const airport of sampleAirports) {
-      let reachable = 0, totalEfficiency = 0;
-      for (const probe of probes) {
-        if (probe.code === airport.code) continue;
-        try {
-          const result = JSON.parse(state.kernel.searchRoutes(airport.code, probe.code, 2));
-          if (result.paths?.length) {
-            reachable++;
-            totalEfficiency += result.paths[0].efficiency;
-          }
-        } catch { /* skip */ }
-      }
-      if (reachable > 0) {
-        scores.set(airport.code, {
-          code: airport.code, lat: airport.lat, lon: airport.lon,
-          reachable, avgEfficiency: totalEfficiency / reachable
+  function computeBestDestinations(originCode) {
+    if (!state.kernel || state.airports.length === 0) return {};
+    const origin = state.airportMap.get(originCode);
+    if (!origin) return {};
+    const candidates = state.airports.filter(a => a.code !== originCode);
+    const sample = candidates.length > 200
+      ? candidates.filter((_, i) => i % Math.ceil(candidates.length / 200) === 0)
+      : candidates;
+    const continentResults = {};
+    for (const dest of sample) {
+      try {
+        const result = JSON.parse(state.kernel.searchRoutes(originCode, dest.code, 2));
+        if (!result.paths || !result.paths.length) continue;
+        const path = result.paths[0];
+        const continent = getContinent(dest.lat, dest.lon);
+        if (!continentResults[continent]) continentResults[continent] = [];
+        continentResults[continent].push({
+          code: dest.code,
+          lat: dest.lat,
+          lon: dest.lon,
+          distanceKm: path.totalDistanceKm,
+          efficiency: path.efficiency,
+          hops: path.hops || path.legs || 0,
+          route: path.airports ? path.airports.map(a => a.code).join(' → ') : originCode + ' → ' + dest.code
         });
-      }
+      } catch { /* skip */ }
     }
-
-    const ranked = [...scores.values()]
-      .sort((a, b) => b.reachable - a.reachable || b.avgEfficiency - a.avgEfficiency)
-      .slice(0, 5);
-
-    return ranked.map(r => ({
-      anchorAirport: r.code, lat: r.lat, lon: r.lon,
-      detail: `${r.reachable}/${probes.length} 프로브 도달`,
-      metric: `평균 효율 ${(r.avgEfficiency * 100).toFixed(1)}%`
-    }));
+    for (const continent of Object.keys(continentResults)) {
+      continentResults[continent].sort((a, b) => b.efficiency - a.efficiency);
+      continentResults[continent] = continentResults[continent].slice(0, 3);
+    }
+    return continentResults;
   }
 
-  // Pick geographically spread probe airports from loaded data
-  function pickProbeAirports(count) {
-    if (state.airports.length <= count) return [...state.airports];
-    // Divide world longitude into equal buckets and pick one from each
-    const buckets = Array.from({ length: count }, () => []);
-    const bucketWidth = 360 / count;
-    for (const a of state.airports) {
-      const idx = Math.min(count - 1, Math.floor((a.lon + 180) / bucketWidth));
-      buckets[idx].push(a);
-    }
-    return buckets
-      .filter(b => b.length > 0)
-      .map(b => b[Math.floor(b.length / 2)]);
-  }
-
-  function renderBestNodes(items) {
-    if (!items.length) {
-      bestContainer.innerHTML = '<div class="empty-state">경로 데이터 분석 중 허브를 찾지 못했습니다.</div>';
+  function renderBestDestinations(container, data) {
+    container.innerHTML = '';
+    container.className = 'best-continent-container';
+    const continents = Object.keys(data);
+    if (!continents.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.textContent = '목적지를 찾을 수 없습니다.';
+      container.appendChild(empty);
       return;
     }
-    bestContainer.innerHTML = items.map((n, i) =>
-      `<div class="best-card-item">` +
-        `<div class="best-card-header"><strong>#${i+1} ${n.anchorAirport}</strong></div>` +
-        `<p>${n.detail}</p>` +
-        `<p class="best-meta">${n.metric}</p>` +
-      `</div>`
-    ).join('');
+    continents.forEach(continent => {
+      const group = document.createElement('div');
+      group.className = 'best-continent-group';
+      const header = document.createElement('h3');
+      header.className = 'best-continent-header';
+      header.textContent = continent;
+      group.appendChild(header);
+      const grid = document.createElement('div');
+      grid.className = 'best-grid';
+      data[continent].forEach((dest, i) => {
+        const card = document.createElement('article');
+        card.className = 'best-card-item';
+        const cardHeader = document.createElement('div');
+        cardHeader.className = 'best-card-header';
+        const strong = document.createElement('strong');
+        strong.textContent = '#' + (i + 1) + ' ' + dest.code;
+        cardHeader.appendChild(strong);
+        card.appendChild(cardHeader);
+        const body = document.createElement('p');
+        body.textContent = dest.route;
+        card.appendChild(body);
+        const meta = document.createElement('div');
+        meta.className = 'best-meta';
+        const dist = document.createElement('span');
+        dist.textContent = dest.distanceKm.toFixed(0) + ' km';
+        const eff = document.createElement('span');
+        eff.textContent = '효율 ' + (dest.efficiency * 100).toFixed(1) + '%';
+        meta.appendChild(dist);
+        meta.appendChild(eff);
+        card.appendChild(meta);
+        grid.appendChild(card);
+      });
+      group.appendChild(grid);
+      container.appendChild(group);
+    });
   }
 
-  async function refreshBestHubs() {
-    bestContainer.classList.add('loading');
-    // Use setTimeout to allow the UI to update before blocking computation
-    await new Promise(r => setTimeout(r, 50));
-    const hubs = computeBestHubs();
-    renderBestNodes(hubs);
-    bestContainer.classList.remove('loading');
+  async function refreshBestSections() {
+    const fromCode = fromInput.value.trim().toUpperCase();
+    const toCode = toInput.value.trim().toUpperCase();
+    if (fromCode.length === 3 && state.airportMap.has(fromCode)) {
+      bestFromSection.style.display = '';
+      bestFromTitle.textContent = fromCode + '에서 최적 목적지';
+      bestFromResults.classList.add('loading');
+      await new Promise(r => setTimeout(r, 30));
+      const fromData = computeBestDestinations(fromCode);
+      renderBestDestinations(bestFromResults, fromData);
+      bestFromResults.classList.remove('loading');
+    } else {
+      bestFromSection.style.display = 'none';
+    }
+    if (toCode.length === 3 && state.airportMap.has(toCode)) {
+      bestToSection.style.display = '';
+      bestToTitle.textContent = toCode + '에서 최적 목적지';
+      bestToResults.classList.add('loading');
+      await new Promise(r => setTimeout(r, 30));
+      const toData = computeBestDestinations(toCode);
+      renderBestDestinations(bestToResults, toData);
+      bestToResults.classList.remove('loading');
+    } else {
+      bestToSection.style.display = 'none';
+    }
   }
 
   async function init() {
@@ -551,11 +534,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const h = JSON.parse(state.kernel.getHealth());
       statRoutes.textContent = h.routes_loaded.toLocaleString();
       statWorkers.textContent = 'WASM-Serverless';
-      await refreshBestHubs();
+      await refreshBestSections();
     }
   }
 
-  bestRefreshBtn.addEventListener('click', refreshBestHubs);
+  bestRefreshBtn.addEventListener('click', refreshBestSections);
 
   resizeAllCanvases();
   init();
