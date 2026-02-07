@@ -232,11 +232,17 @@ document.addEventListener('DOMContentLoaded', () => {
     ctx.fillStyle = '#02142f'; ctx.fillRect(0, 0, canvas.width, canvas.height);
     // Draw OSM tile layer
     drawTiles(ctx, canvas, viewport);
+    // Scale airport dot radius with zoom so dots remain visible at high zoom levels.
+    // Beyond a baseline zoom the radius grows logarithmically to stay perceptible
+    // against the increasingly detailed tile layer.
+    const baseZoom = 4;
+    const dotScale = view.zoom > baseZoom ? Math.max(1, 1 + Math.log2(view.zoom / baseZoom)) : 1;
     state.airports.forEach(a => {
       const c = worldToCanvas(a.u, a.v, viewport, canvas);
       const sel = (state.selection.from?.code === a.code || state.selection.to?.code === a.code);
       ctx.fillStyle = sel ? '#fbbf24' : 'rgba(148,163,184,0.55)';
-      ctx.beginPath(); ctx.arc(c.x, c.y, sel ? 4 : 2, 0, Math.PI*2); ctx.fill();
+      const r = (sel ? 4 : 2) * dotScale;
+      ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI*2); ctx.fill();
     });
     state.routes.forEach((route, idx) => {
       ctx.strokeStyle = idx === 0 ? '#22d3ee' : '#5eead4'; ctx.lineWidth = 2; ctx.beginPath();
