@@ -250,8 +250,9 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) { statusEl.textContent = '오류: ' + err.message; }
   }
 
-  mainCanvas.addEventListener('click', (e) => {
-    const rect = mainCanvas.getBoundingClientRect();
+  function handleCanvasClick(canvas, e) {
+    if (dragState.blockClick) return;
+    const rect = canvas.getBoundingClientRect();
     const world = canvasToWorld((e.clientX - rect.left)/rect.width, (e.clientY - rect.top)/rect.height, getViewWindow());
     const lon = world.u * 360 - 180, lat = 90 - world.v * 180;
     let best = null, minDist = Infinity;
@@ -260,7 +261,67 @@ document.addEventListener('DOMContentLoaded', () => {
       if (d < minDist) { minDist = d; best = a; }
     });
     if (best) setInputField(state.activeField, best.code);
+  }
+
+  function handlePointerDown(canvas, e) {
+    if (e.button !== 0) return;
+    dragState.active = true; dragState.pointerId = e.pointerId;
+    dragState.lastX = e.clientX; dragState.lastY = e.clientY;
+    dragState.moved = false; dragState.blockClick = false;
+    canvas.setPointerCapture(e.pointerId);
+    canvas.classList.add('dragging');
+  }
+
+  function handlePointerMove(canvas, e) {
+    if (!dragState.active || e.pointerId !== dragState.pointerId) return;
+    const dx = e.clientX - dragState.lastX, dy = e.clientY - dragState.lastY;
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) dragState.moved = true;
+    const rect = canvas.getBoundingClientRect();
+    view.centerX -= dx / rect.width / view.zoom;
+    view.centerY -= dy / rect.height / view.zoom;
+    clampViewCenter();
+    dragState.lastX = e.clientX; dragState.lastY = e.clientY;
+    drawAllScenes();
+  }
+
+  function handlePointerUp(canvas, e) {
+    if (e.pointerId !== dragState.pointerId) return;
+    canvas.classList.remove('dragging');
+    dragState.blockClick = dragState.moved;
+    dragState.active = false; dragState.pointerId = null;
+  }
+
+  function handleWheel(e) {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    view.zoom = Math.min(view.maxZoom, Math.max(view.minZoom, view.zoom * factor));
+    clampViewCenter();
+    drawAllScenes();
+  }
+
+  function openMapModal() {
+    statusBeforeModal = statusEl.textContent;
+    mapModal.classList.add('open'); mapModal.setAttribute('aria-hidden', 'false');
+    resizeAllCanvases();
+  }
+
+  function closeMapModal() {
+    mapModal.classList.remove('open'); mapModal.setAttribute('aria-hidden', 'true');
+    statusEl.textContent = statusBeforeModal;
+  }
+
+  [mainCanvas, modalCanvas].forEach(canvas => {
+    canvas.addEventListener('click', (e) => handleCanvasClick(canvas, e));
+    canvas.addEventListener('pointerdown', (e) => handlePointerDown(canvas, e));
+    canvas.addEventListener('pointermove', (e) => handlePointerMove(canvas, e));
+    canvas.addEventListener('pointerup', (e) => handlePointerUp(canvas, e));
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); openMapModal(); });
   });
+
+  modalCloseBtn.addEventListener('click', closeMapModal);
+  mapModal.addEventListener('click', (e) => { if (e.target === mapModal) closeMapModal(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && mapModal.classList.contains('open')) closeMapModal(); });
 
   swapBtn.addEventListener('click', () => { const f = fromInput.value, t = toInput.value; setInputField('from', t); setInputField('to', f); });
   modeButtons.forEach(b => b.addEventListener('click', () => { modeButtons.forEach(x => x.classList.remove('active')); b.classList.add('active'); state.activeField = b.dataset.field; }));
