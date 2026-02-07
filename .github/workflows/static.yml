@@ -46,6 +46,7 @@ jobs:
           cp docs/app.js dist/
           cp docs/app.css dist/
           cp docs/sw.js dist/
+          cp docs/best-worker.js dist/
           cp docs/airports.json dist/
           cp docs/wasm/nuke_blob.bin dist/wasm/
           cp docs/wasm/nuke_kernel.js dist/wasm/
