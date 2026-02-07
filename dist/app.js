@@ -127,6 +127,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const bestFromResults = document.getElementById('best-from-results');
   const bestToResults = document.getElementById('best-to-results');
   const bestRefreshBtn = document.getElementById('best-refresh-btn');
+  const bestFromRefreshBtn = document.getElementById('best-from-refresh-btn');
+  const bestToRefreshBtn = document.getElementById('best-to-refresh-btn');
+  const bestFromContinentSelect = document.getElementById('best-from-continent');
+  const bestToContinentSelect = document.getElementById('best-to-continent');
   const mapModal = document.getElementById('map-modal');
   const modalCanvas = document.getElementById('route-map-large');
   const modalCloseBtn = document.getElementById('map-modal-close');
@@ -577,11 +581,15 @@ document.addEventListener('DOMContentLoaded', () => {
     return '기타';
   }
 
-  function computeBestDestinations(originCode) {
+  function computeBestDestinations(originCode, continentFilter) {
     if (!state.kernel || state.airports.length === 0) return {};
     const origin = state.airportMap.get(originCode);
     if (!origin) return {};
-    const candidates = state.airports.filter(a => a.code !== originCode);
+    let targetContinent = continentFilter || getContinent(origin.lat, origin.lon);
+    const candidates = state.airports.filter(a => {
+      if (a.code === originCode) return false;
+      return getContinent(a.lat, a.lon) === targetContinent;
+    });
     const sample = candidates.length > 200
       ? candidates.filter((_, i) => i % Math.ceil(candidates.length / 200) === 0)
       : candidates;
@@ -664,10 +672,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const toCode = toInput.value.trim().toUpperCase();
     if (fromCode.length === 3 && state.airportMap.has(fromCode)) {
       bestFromSection.style.display = '';
-      bestFromTitle.textContent = fromCode + '에서 최적 목적지';
+      const fromContinent = bestFromContinentSelect ? bestFromContinentSelect.value : '';
+      const fromOrigin = state.airportMap.get(fromCode);
+      const fromLabel = fromContinent || (fromOrigin ? getContinent(fromOrigin.lat, fromOrigin.lon) : '');
+      bestFromTitle.textContent = fromCode + '에서 최적 목적지' + (fromLabel ? ' (' + fromLabel + ')' : '');
       bestFromResults.classList.add('loading');
       await new Promise(r => setTimeout(r, 30));
-      const fromData = computeBestDestinations(fromCode);
+      const fromData = computeBestDestinations(fromCode, fromContinent);
       renderBestDestinations(bestFromResults, fromData);
       bestFromResults.classList.remove('loading');
     } else {
@@ -675,10 +686,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (toCode.length === 3 && state.airportMap.has(toCode)) {
       bestToSection.style.display = '';
-      bestToTitle.textContent = toCode + '에서 최적 목적지';
+      const toContinent = bestToContinentSelect ? bestToContinentSelect.value : '';
+      const toOrigin = state.airportMap.get(toCode);
+      const toLabel = toContinent || (toOrigin ? getContinent(toOrigin.lat, toOrigin.lon) : '');
+      bestToTitle.textContent = toCode + '에서 최적 목적지' + (toLabel ? ' (' + toLabel + ')' : '');
       bestToResults.classList.add('loading');
       await new Promise(r => setTimeout(r, 30));
-      const toData = computeBestDestinations(toCode);
+      const toData = computeBestDestinations(toCode, toContinent);
       renderBestDestinations(bestToResults, toData);
       bestToResults.classList.remove('loading');
     } else {
@@ -833,7 +847,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   searchBtn.addEventListener('click', searchRoutes);
   window.addEventListener('resize', resizeAllCanvases);
-  bestRefreshBtn.addEventListener('click', refreshBestSections);
+  if (bestRefreshBtn) bestRefreshBtn.addEventListener('click', refreshBestSections);
+  if (bestFromRefreshBtn) bestFromRefreshBtn.addEventListener('click', refreshBestSections);
+  if (bestToRefreshBtn) bestToRefreshBtn.addEventListener('click', refreshBestSections);
 
   async function init() {
     await initWasm();

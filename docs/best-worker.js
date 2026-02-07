@@ -51,9 +51,22 @@ async function initKernel() {
   kernel._free(ptr);
 }
 
-function computeBestDestinations(originCode, airports) {
+function computeBestDestinations(originCode, airports, continentFilter) {
   if (!kernel || !airports.length) return {};
-  const candidates = airports.filter(a => a.code !== originCode);
+  const origin = airports.find(a => a.code === originCode);
+  if (!origin) return {};
+
+  // Determine the target continent(s) to search
+  let targetContinent = continentFilter || null;
+  if (!targetContinent) {
+    // Default: same continent as the origin airport
+    targetContinent = getContinent(origin.lat, origin.lon);
+  }
+
+  const candidates = airports.filter(a => {
+    if (a.code === originCode) return false;
+    return getContinent(a.lat, a.lon) === targetContinent;
+  });
   const sample = candidates.length > 200
     ? candidates.filter((_, i) => i % Math.ceil(candidates.length / 200) === 0)
     : candidates;
@@ -98,7 +111,7 @@ self.onmessage = async (e) => {
 
   if (msg.type === 'compute') {
     try {
-      const data = computeBestDestinations(msg.originCode, msg.airports);
+      const data = computeBestDestinations(msg.originCode, msg.airports, msg.continent || '');
       self.postMessage({ type: 'result', id: msg.id, originCode: msg.originCode, data });
     } catch (err) {
       self.postMessage({ type: 'error', id: msg.id, error: err.message });

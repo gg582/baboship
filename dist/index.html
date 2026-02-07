@@ -89,7 +89,19 @@
         <section class="card best-card" id="best-from-section" style="display:none;">
             <div class="results-header">
                 <h2 id="best-from-title">출발 공항에서 최적 목적지</h2>
-                <button type="button" id="best-refresh-btn">재계산</button>
+                <div class="best-controls">
+                    <select id="best-from-continent">
+                        <option value="">같은 대륙 (자동)</option>
+                        <option value="북미">북미</option>
+                        <option value="남미">남미</option>
+                        <option value="유럽">유럽</option>
+                        <option value="아시아">아시아</option>
+                        <option value="아프리카">아프리카</option>
+                        <option value="중동">중동</option>
+                        <option value="오세아니아">오세아니아</option>
+                    </select>
+                    <button type="button" id="best-from-refresh-btn">최적 목적지 찾기</button>
+                </div>
             </div>
             <div id="best-from-results"></div>
         </section>
@@ -97,6 +109,19 @@
         <section class="card best-card" id="best-to-section" style="display:none;">
             <div class="results-header">
                 <h2 id="best-to-title">도착 공항에서 최적 목적지</h2>
+                <div class="best-controls">
+                    <select id="best-to-continent">
+                        <option value="">같은 대륙 (자동)</option>
+                        <option value="북미">북미</option>
+                        <option value="남미">남미</option>
+                        <option value="유럽">유럽</option>
+                        <option value="아시아">아시아</option>
+                        <option value="아프리카">아프리카</option>
+                        <option value="중동">중동</option>
+                        <option value="오세아니아">오세아니아</option>
+                    </select>
+                    <button type="button" id="best-to-refresh-btn">최적 목적지 찾기</button>
+                </div>
             </div>
             <div id="best-to-results"></div>
         </section>

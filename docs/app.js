@@ -118,6 +118,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const bestToResults = document.getElementById('best-to-results');
   const bestFromRefreshBtn = document.getElementById('best-from-refresh-btn');
   const bestToRefreshBtn = document.getElementById('best-to-refresh-btn');
+  const bestFromContinentSelect = document.getElementById('best-from-continent');
+  const bestToContinentSelect = document.getElementById('best-to-continent');
   const mapModal = document.getElementById('map-modal');
   const modalCanvas = document.getElementById('route-map-large');
   const modalCloseBtn = document.getElementById('map-modal-close');
@@ -452,34 +454,106 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  function getContinent(lat, lon) {
+    if (lat >= 7 && lat <= 84 && lon >= -170 && lon <= -50) return '북미';
+    if (lat < 7 && lat >= -60 && lon >= -100 && lon <= -30) return '남미';
+    if (lat < -15 && lon >= 100 && lon <= 180) return '오세아니아';
+    if (lat >= 35 && lon >= -15 && lon <= 60) return '유럽';
+    if (lat < 35 && lat >= -40 && lon >= -20 && lon <= 55) return '아프리카';
+    if (lat >= -15 && lon >= 25 && lon <= 55) return '중동';
+    if (lat >= -15 && lon > 55 && lon <= 180) return '아시아';
+    if (lat >= 5 && lon >= 25 && lon <= 180) return '아시아';
+    return '기타';
+  }
+
+  function computeBestDestinationsFallback(originCode, continentFilter) {
+    if (!state.kernel || state.airports.length === 0) return {};
+    const origin = state.airportMap.get(originCode);
+    if (!origin) return {};
+    let targetContinent = continentFilter || getContinent(origin.lat, origin.lon);
+    const candidates = state.airports.filter(a => {
+      if (a.code === originCode) return false;
+      return getContinent(a.lat, a.lon) === targetContinent;
+    });
+    const sample = candidates.length > 200
+      ? candidates.filter((_, i) => i % Math.ceil(candidates.length / 200) === 0)
+      : candidates;
+    const continentResults = {};
+    for (const dest of sample) {
+      try {
+        const result = JSON.parse(state.kernel.searchRoutes(originCode, dest.code, 2));
+        if (!result.paths || !result.paths.length) continue;
+        const path = result.paths[0];
+        const continent = getContinent(dest.lat, dest.lon);
+        if (!continentResults[continent]) continentResults[continent] = [];
+        continentResults[continent].push({
+          code: dest.code,
+          lat: dest.lat,
+          lon: dest.lon,
+          distanceKm: path.totalDistanceKm,
+          efficiency: path.efficiency,
+          hops: path.hops || path.legs || 0,
+          route: path.airports ? path.airports.map(a => a.code).join(' → ') : originCode + ' → ' + dest.code
+        });
+      } catch { /* skip */ }
+    }
+    for (const continent of Object.keys(continentResults)) {
+      continentResults[continent].sort((a, b) => b.efficiency - a.efficiency);
+      continentResults[continent] = continentResults[continent].slice(0, 3);
+    }
+    return continentResults;
+  }
+
   function requestBestFrom() {
-    if (!state.bestWorker) return;
     const fromCode = fromInput.value.trim().toUpperCase();
-    const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon }));
     if (fromCode.length !== 3 || !state.airportMap.has(fromCode)) {
       bestFromResults.innerHTML = '<div class="empty-state">유효한 3자리 IATA 코드를 입력하세요.</div>';
       return;
     }
-    bestFromTitle.textContent = fromCode + '에서 최적 목적지';
+    const continent = bestFromContinentSelect ? bestFromContinentSelect.value : '';
+    const origin = state.airportMap.get(fromCode);
+    const label = continent || (origin ? getContinent(origin.lat, origin.lon) : '');
+    bestFromTitle.textContent = fromCode + '에서 최적 목적지' + (label ? ' (' + label + ')' : '');
     bestFromResults.classList.add('loading');
     bestFromResults.innerHTML = '<div class="empty-state">계산 중...</div>';
-    state.bestRequestId++;
-    state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: fromCode, airports });
+    if (state.bestWorker) {
+      const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon }));
+      state.bestRequestId++;
+      state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: fromCode, airports, continent });
+    } else if (state.kernel) {
+      const data = computeBestDestinationsFallback(fromCode, continent);
+      renderBestDestinations(bestFromResults, data);
+      bestFromResults.classList.remove('loading');
+    } else {
+      bestFromResults.innerHTML = '<div class="empty-state">WASM 커널이 아직 로드되지 않았습니다. 잠시 후 다시 시도하세요.</div>';
+      bestFromResults.classList.remove('loading');
+    }
   }
 
   function requestBestTo() {
-    if (!state.bestWorker) return;
     const toCode = toInput.value.trim().toUpperCase();
-    const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon }));
     if (toCode.length !== 3 || !state.airportMap.has(toCode)) {
       bestToResults.innerHTML = '<div class="empty-state">유효한 3자리 IATA 코드를 입력하세요.</div>';
       return;
     }
-    bestToTitle.textContent = toCode + '에서 최적 목적지';
+    const continent = bestToContinentSelect ? bestToContinentSelect.value : '';
+    const origin = state.airportMap.get(toCode);
+    const label = continent || (origin ? getContinent(origin.lat, origin.lon) : '');
+    bestToTitle.textContent = toCode + '에서 최적 목적지' + (label ? ' (' + label + ')' : '');
     bestToResults.classList.add('loading');
     bestToResults.innerHTML = '<div class="empty-state">계산 중...</div>';
-    state.bestRequestId++;
-    state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: toCode, airports });
+    if (state.bestWorker) {
+      const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon }));
+      state.bestRequestId++;
+      state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: toCode, airports, continent });
+    } else if (state.kernel) {
+      const data = computeBestDestinationsFallback(toCode, continent);
+      renderBestDestinations(bestToResults, data);
+      bestToResults.classList.remove('loading');
+    } else {
+      bestToResults.innerHTML = '<div class="empty-state">WASM 커널이 아직 로드되지 않았습니다. 잠시 후 다시 시도하세요.</div>';
+      bestToResults.classList.remove('loading');
+    }
   }
 
   async function init() {
