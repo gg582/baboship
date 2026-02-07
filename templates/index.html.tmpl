@@ -86,19 +86,20 @@
             <div id="route-results"></div>
         </section>
 
-        <section class="card best-card" id="best-from-section" style="display:none;">
+        <section class="card best-card" id="best-from-section">
             <div class="results-header">
                 <h2 id="best-from-title">출발 공항에서 최적 목적지</h2>
-                <button type="button" id="best-refresh-btn">재계산</button>
+                <button type="button" id="best-from-refresh-btn">최적 경로 찾기</button>
             </div>
-            <div id="best-from-results"></div>
+            <div id="best-from-results"><div class="empty-state">아직 최적 경로를 검색하지 않았습니다. 버튼을 눌러서 검색하세요.</div></div>
         </section>
 
-        <section class="card best-card" id="best-to-section" style="display:none;">
+        <section class="card best-card" id="best-to-section">
             <div class="results-header">
                 <h2 id="best-to-title">도착 공항에서 최적 목적지</h2>
+                <button type="button" id="best-to-refresh-btn">최적 경로 찾기</button>
             </div>
-            <div id="best-to-results"></div>
+            <div id="best-to-results"><div class="empty-state">아직 최적 경로를 검색하지 않았습니다. 버튼을 눌러서 검색하세요.</div></div>
         </section>
     </main>
     <div id="map-modal" class="map-modal" aria-hidden="true">
