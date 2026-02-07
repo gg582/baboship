@@ -22,7 +22,7 @@ async function initWasm() {
       throw new Error('cwrap missing');
     }
 
-    // Bind WASM functions
+    // Bind WASM functions via cwrap (wraps C-exported symbols)
     state.kernel.initStore = state.kernel.cwrap('nuke_wasm_init', 'number', []);
     state.kernel.loadData = state.kernel.cwrap('nuke_wasm_load_data', 'number', ['number', 'number']);
     state.kernel.getAirports = state.kernel.cwrap('nuke_wasm_get_airports_json', 'string', []);
@@ -30,9 +30,16 @@ async function initWasm() {
     state.kernel.getHealth = state.kernel.cwrap('nuke_wasm_get_health_json', 'string', []);
     state.kernel.searchRoutes = state.kernel.cwrap('nuke_wasm_search_routes_json', 'string', ['string', 'string', 'number']);
     state.kernel.calcScore = state.kernel.cwrap('nuke_wasm_calc_score', 'number', ['number', 'number', 'number', 'number', 'number']);
-    
+
+    // cwrap returns the raw function for numeric-only signatures; fall back to
+    // the underscore-prefixed direct export when the symbol is present but
+    // cwrap could not resolve it (e.g. after streaming-compile race).
     if (typeof state.kernel.initStore !== 'function') {
-      throw new Error('initStore is not a function - symbol might be missing in WASM exports');
+      if (typeof state.kernel._nuke_wasm_init === 'function') {
+        state.kernel.initStore = state.kernel._nuke_wasm_init;
+      } else {
+        throw new Error('initStore is not a function - symbol might be missing in WASM exports');
+      }
     }
 
     state.kernel.initStore();
@@ -45,6 +52,9 @@ async function initWasm() {
     
     if (state.kernel._malloc) {
       const ptr = state.kernel._malloc(uint8Array.length);
+      if (!state.kernel.HEAPU8) {
+        throw new Error('HEAPU8 is not available on WASM module');
+      }
       state.kernel.HEAPU8.set(uint8Array, ptr);
       state.kernel.loadData(ptr, uint8Array.length);
       state.kernel._free(ptr);
