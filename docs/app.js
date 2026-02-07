@@ -490,6 +490,8 @@ document.addEventListener('DOMContentLoaded', () => {
     for (const a of state.airports) {
       if (a.code === originCode) continue;
       if (getContinent(a.lat, a.lon) !== filterContinent) continue;
+      // Skip domestic (same-country) destinations
+      if (originCountry && a.country && a.country === originCountry) continue;
       const dist = haversineKm(origin.lat, origin.lon, a.lat, a.lon);
       if (dist <= 500) tier1Near.push(a);
       else if (dist <= 1000) tier1Far.push(a);
@@ -504,6 +506,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const HUB_MIN_CONNECTIONS = 30;
         for (const d of directDests) {
           if (getContinent(d.lat, d.lon) !== filterContinent) continue;
+          // Skip domestic (same-country) destinations
+          if (originCountry && d.country && d.country === originCountry) continue;
           if (d.connections >= HUB_MIN_CONNECTIONS) {
             const existing = state.airportMap.get(d.code);
             if (existing) tier2Hubs.push(existing);
@@ -527,6 +531,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (candidates.length < 20) {
       const remaining = state.airports.filter(a => {
         if (a.code === originCode || seen.has(a.code)) return false;
+        // Skip domestic (same-country) destinations
+        if (originCountry && a.country && a.country === originCountry) return false;
         return getContinent(a.lat, a.lon) === filterContinent;
       });
       for (const a of remaining) {
@@ -549,6 +555,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (seenCountries.size >= MAX_COUNTRIES) break;
 
       const destCountry = dest.country || '';
+
+      // Skip domestic (same-country) destinations
+      if (originCountry && destCountry && destCountry === originCountry) continue;
+
       if (destCountry && seenCountries.has(destCountry)) continue;
 
       try {
