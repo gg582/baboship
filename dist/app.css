@@ -1,27 +1,6 @@
-@font-face {
-    font-family: 'Soonbatang';
-    src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_eight @1.0/SunBatang-Light.woff') format('woff');
-    font-weight: 300;
-    font-display: swap;
-}
-
- @font-face {
-    font-family: 'Soonbatang';
-    src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_eight @1.0/SunBatang-Medium.woff') format('woff');
-    font-weight: 500;
-    font-display: swap;
-}
-
- @font-face {
-    font-family: 'Soonbatang';
-    src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_eight @1.0/SunBatang-Bold.woff') format('woff');
-    font-weight: 700;
-    font-display: swap;
-}
-
 :root {
     color-scheme: light;
-    font-family: 'Soonbatang', 'Noto Sans KR', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: 'IBM Plex Sans KR', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     --bg: #f5f6f8;
     --card: #fcfcfd;
     --card-border: #d7dde7;
@@ -444,6 +423,32 @@ button.ghost:hover {
 
 .best-grid.loading {
     opacity: 0.5;
+}
+
+.best-continent-container {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    margin-top: 1rem;
+}
+
+.best-continent-container.loading {
+    opacity: 0.5;
+}
+
+.best-continent-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.best-continent-header {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--accent);
+    padding-bottom: 0.4rem;
+    border-bottom: 2px solid var(--card-border);
 }
 
 @media (max-width: 720px) {
