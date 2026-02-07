@@ -9,7 +9,7 @@ self.addEventListener('activate', (event) => {
 });
 
 async function handleAirports(url) {
-  const limit = parseInt(url.searchParams.get('limit')) || 1024;
+  const limit = parseInt(url.searchParams.get('limit')) || 8192;
   const offset = parseInt(url.searchParams.get('offset')) || 0;
   
   try {
