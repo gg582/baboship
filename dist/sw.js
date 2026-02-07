@@ -8,7 +8,7 @@ async function getKernel() {
   if (kernel) return kernel;
   if (!kernelPromise) {
     kernelPromise = createNukeKernel({
-      locateFile: (path) => `wasm/${path}`
+      locateFile: (path) => `./wasm/${path}`
     });
   }
   kernel = await kernelPromise;
