@@ -55,7 +55,7 @@ async function initWasm() {
     console.log('WASM Kernel initialized successfully');
   } catch (err) {
     console.error('WASM Kernel failed to load:', err);
-    throw err;
+    state.kernel = null;
   }
 }
 
@@ -206,6 +206,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const from = fromInput.value.trim().toUpperCase(), to = toInput.value.trim().toUpperCase();
     const maxT = parseInt(transfersInput.value) || 0;
     if (from.length !== 3 || to.length !== 3) return;
+    if (!state.kernel) { statusEl.textContent = 'WASM 커널이 로드되지 않았습니다.'; return; }
     statusEl.textContent = 'WASM 분석 중...';
     try {
       const data = JSON.parse(state.kernel.searchRoutes(from, to, maxT));
@@ -242,10 +243,12 @@ document.addEventListener('DOMContentLoaded', () => {
     await initServiceWorker();
     await initWasm();
     await fetchAirports();
-    const h = JSON.parse(state.kernel.getHealth());
-    statRoutes.textContent = h.routes_loaded.toLocaleString();
-    statWorkers.textContent = 'WASM-Serverless';
-    bestContainer.innerHTML = JSON.parse(state.kernel.getBest()).items.map(n => `<div class="best-card-item"><strong>${n.anchorAirport}</strong><p>${n.notes}</p></div>`).join('');
+    if (state.kernel) {
+      const h = JSON.parse(state.kernel.getHealth());
+      statRoutes.textContent = h.routes_loaded.toLocaleString();
+      statWorkers.textContent = 'WASM-Serverless';
+      bestContainer.innerHTML = JSON.parse(state.kernel.getBest()).items.map(n => `<div class="best-card-item"><strong>${n.anchorAirport}</strong><p>${n.notes}</p></div>`).join('');
+    }
   }
 
   resizeAllCanvases();
