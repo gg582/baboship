@@ -343,6 +343,22 @@ button.ghost:hover {
     gap: 1rem;
 }
 
+.best-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.best-controls select {
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--card-border);
+    border-radius: 4px;
+    background: #fff;
+    font-size: 0.85rem;
+    color: var(--text);
+}
+
 #route-results {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
