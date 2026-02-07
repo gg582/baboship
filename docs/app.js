@@ -507,9 +507,10 @@ document.addEventListener('DOMContentLoaded', () => {
         for (const d of directDests) {
           if (getContinent(d.lat, d.lon) !== filterContinent) continue;
           // Skip domestic (same-country) destinations
-          if (originCountry && d.country && d.country === originCountry) continue;
+          const existing = state.airportMap.get(d.code);
+          const destCountry = d.country || existing?.country || '';
+          if (originCountry && destCountry && destCountry === originCountry) continue;
           if (d.connections >= HUB_MIN_CONNECTIONS) {
-            const existing = state.airportMap.get(d.code);
             if (existing) tier2Hubs.push(existing);
           }
         }
