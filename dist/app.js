@@ -586,15 +586,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const origin = state.airportMap.get(originCode);
     if (!origin) return {};
     let targetContinent = continentFilter || getContinent(origin.lat, origin.lon);
+    const originCountry = origin.country || '';
     const candidates = state.airports.filter(a => {
       if (a.code === originCode) return false;
+      if (originCountry && a.country && a.country === originCountry) return false;
       return getContinent(a.lat, a.lon) === targetContinent;
     });
     const sample = candidates.length > 200
       ? candidates.filter((_, i) => i % Math.ceil(candidates.length / 200) === 0)
       : candidates;
+    const seenCountries = new Set();
     const continentResults = {};
+    const MAX_COUNTRIES = 5;
     for (const dest of sample) {
+      if (seenCountries.size >= MAX_COUNTRIES) break;
+      const destCountry = dest.country || '';
+      if (originCountry && destCountry && destCountry === originCountry) continue;
+      if (destCountry && seenCountries.has(destCountry)) continue;
       try {
         const result = JSON.parse(state.kernel.searchRoutes(originCode, dest.code, 2));
         if (!result.paths || !result.paths.length) continue;
@@ -605,16 +613,27 @@ document.addEventListener('DOMContentLoaded', () => {
           code: dest.code,
           lat: dest.lat,
           lon: dest.lon,
+          country: destCountry,
           distanceKm: path.totalDistanceKm,
           efficiency: path.efficiency,
           hops: path.hops || path.legs || 0,
           route: path.airports ? path.airports.map(a => a.code).join(' → ') : originCode + ' → ' + dest.code
         });
+        if (destCountry) seenCountries.add(destCountry);
       } catch { /* skip */ }
     }
     for (const continent of Object.keys(continentResults)) {
       continentResults[continent].sort((a, b) => b.efficiency - a.efficiency);
-      continentResults[continent] = continentResults[continent].slice(0, 3);
+      const unique = [];
+      const countrySeen = new Set();
+      for (const item of continentResults[continent]) {
+        const c = item.country || item.code;
+        if (countrySeen.has(c)) continue;
+        countrySeen.add(c);
+        unique.push(item);
+        if (unique.length >= 5) break;
+      }
+      continentResults[continent] = unique;
     }
     return continentResults;
   }
@@ -645,7 +664,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const cardHeader = document.createElement('div');
         cardHeader.className = 'best-card-header';
         const strong = document.createElement('strong');
-        strong.textContent = '#' + (i + 1) + ' ' + dest.code;
+        strong.textContent = '#' + (i + 1) + ' ' + dest.code + (dest.country ? ' (' + dest.country + ')' : '');
         cardHeader.appendChild(strong);
         card.appendChild(cardHeader);
         const body = document.createElement('p');
