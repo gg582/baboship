@@ -4,8 +4,8 @@
     --bg: #f4f5f7;
     --card: #ffffff;
     --card-border: #e0e3ea;
-    --accent: #e86a10;
-    --accent-soft: #c45a0e;
+    --accent: #e8661b;
+    --accent-soft: #c55717;
     --muted: #5a6072;
     --text: #111827;
     --outline: #c0c7d6;
@@ -60,7 +60,7 @@ body {
     right: 0;
     width: 120px;
     height: 100%;
-    background: linear-gradient(135deg, transparent 40%, rgba(232, 106, 16, 0.06) 40%);
+    background: linear-gradient(135deg, transparent 40%, rgba(232, 102, 27, 0.06) 40%);
     pointer-events: none;
 }
 
@@ -81,10 +81,11 @@ body {
     gap: 0.4rem;
     padding: 0.35rem 0.85rem;
     border-radius: 0;
-    border: 1px solid var(--outline);
-    background: #fff8f3;
-    color: var(--accent);
+    border: none;
+    background: var(--accent);
+    color: #fff;
     font-size: 0.85rem;
+    font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
@@ -152,7 +153,7 @@ input {
 input:focus {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 2px rgba(232, 106, 16, 0.15);
+    box-shadow: 0 0 0 2px rgba(232, 102, 27, 0.15);
 }
 
 button {
@@ -208,9 +209,10 @@ button.ghost:hover {
 }
 
 .map-mode button.active {
-    background: rgba(232, 106, 16, 0.12);
-    border-color: rgba(232, 106, 16, 0.4);
-    color: var(--accent);
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
 }
 
 #map-wrapper {
@@ -303,8 +305,8 @@ button.ghost:hover {
 }
 
 .map-modal-close:hover {
-    background: rgba(232, 106, 16, 0.9);
-    border-color: rgba(232, 106, 16, 0.7);
+    background: rgba(232, 102, 27, 0.9);
+    border-color: rgba(232, 102, 27, 0.7);
 }
 
 .selection-panel {
@@ -382,8 +384,9 @@ button.ghost:hover {
 }
 
 .tag.accent {
-    background: rgba(232, 106, 16, 0.12);
-    color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
 }
 
 .empty-state {
