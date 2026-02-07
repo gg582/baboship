@@ -118,6 +118,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const projectPoint = (lon, lat) => {
     const u = (lon + 180) / 360;
+    // Clamp latitude to Web Mercator bounds (±85.051129°) to avoid singularity at poles
     const clampedLat = Math.max(-85.051129, Math.min(85.051129, lat));
     const latRad = clampedLat * Math.PI / 180;
     const v = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2;
@@ -138,10 +139,13 @@ document.addEventListener('DOMContentLoaded', () => {
     img.onerror = () => { entry.loaded = false; };
     img.src = `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
     tileCache.set(key, entry);
-    // Evict old entries when cache grows too large
+    // Cap cache at ~600 tiles (~150 MB) to limit memory usage
     if (tileCache.size > 600) {
-      const first = tileCache.keys().next().value;
-      tileCache.delete(first);
+      const iter = tileCache.keys();
+      for (let i = 0; i < 60; i++) {
+        const k = iter.next().value;
+        if (k) tileCache.delete(k);
+      }
     }
     return entry;
   }
