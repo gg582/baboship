@@ -32,6 +32,7 @@ async function initWasm() {
     state.kernel.getHealth = state.kernel.cwrap('nuke_wasm_get_health_json', 'string', []);
     state.kernel.searchRoutes = state.kernel.cwrap('nuke_wasm_search_routes_json', 'string', ['string', 'string', 'number']);
     state.kernel.calcScore = state.kernel.cwrap('nuke_wasm_calc_score', 'number', ['number', 'number', 'number', 'number', 'number']);
+    state.kernel.getDirectDests = state.kernel.cwrap('nuke_wasm_get_direct_destinations_json', 'string', ['string']);
 
     // cwrap returns the raw function for numeric-only signatures; fall back to
     // the underscore-prefixed direct export when the symbol is present but
@@ -432,7 +433,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const cardHeader = document.createElement('div');
         cardHeader.className = 'best-card-header';
         const strong = document.createElement('strong');
-        strong.textContent = '#' + (i + 1) + ' ' + dest.code;
+        strong.textContent = '#' + (i + 1) + ' ' + dest.code + (dest.country ? ' (' + dest.country + ')' : '');
         cardHeader.appendChild(strong);
         card.appendChild(cardHeader);
         const body = document.createElement('p');
@@ -466,40 +467,129 @@ document.addEventListener('DOMContentLoaded', () => {
     return '기타';
   }
 
+  function haversineKm(lat1, lon1, lat2, lon2) {
+    const R = 6371.0;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
   function computeBestDestinationsFallback(originCode, continentFilter) {
     if (!state.kernel || state.airports.length === 0) return {};
     const origin = state.airportMap.get(originCode);
     if (!origin) return {};
-    let targetContinent = continentFilter || getContinent(origin.lat, origin.lon);
-    const candidates = state.airports.filter(a => {
-      if (a.code === originCode) return false;
-      return getContinent(a.lat, a.lon) === targetContinent;
-    });
-    const sample = candidates.length > 200
-      ? candidates.filter((_, i) => i % Math.ceil(candidates.length / 200) === 0)
-      : candidates;
+    const filterContinent = continentFilter || getContinent(origin.lat, origin.lon);
+    const originCountry = origin.country || '';
+
+    // --- Tier 1: Spatial filtering (500km / 1000km bounding box) ---
+    const tier1Near = [];
+    const tier1Far = [];
+    for (const a of state.airports) {
+      if (a.code === originCode) continue;
+      if (getContinent(a.lat, a.lon) !== filterContinent) continue;
+      const dist = haversineKm(origin.lat, origin.lon, a.lat, a.lon);
+      if (dist <= 500) tier1Near.push(a);
+      else if (dist <= 1000) tier1Far.push(a);
+    }
+
+    // --- Tier 2: Hub-to-hub direct flights ---
+    const tier2Hubs = [];
+    if (state.kernel.getDirectDests) {
+      try {
+        const directData = JSON.parse(state.kernel.getDirectDests(originCode));
+        const directDests = directData.destinations || [];
+        const HUB_MIN_CONNECTIONS = 30;
+        for (const d of directDests) {
+          if (getContinent(d.lat, d.lon) !== filterContinent) continue;
+          if (d.connections >= HUB_MIN_CONNECTIONS) {
+            const existing = state.airportMap.get(d.code);
+            if (existing) tier2Hubs.push(existing);
+          }
+        }
+      } catch { /* skip */ }
+    }
+
+    // --- Merge and deduplicate ---
+    const seen = new Set();
+    const candidates = [];
+    for (const list of [tier1Near, tier2Hubs, tier1Far]) {
+      for (const a of list) {
+        if (!seen.has(a.code)) {
+          seen.add(a.code);
+          candidates.push(a);
+        }
+      }
+    }
+
+    if (candidates.length < 20) {
+      const remaining = state.airports.filter(a => {
+        if (a.code === originCode || seen.has(a.code)) return false;
+        return getContinent(a.lat, a.lon) === filterContinent;
+      });
+      for (const a of remaining) {
+        if (!seen.has(a.code)) {
+          seen.add(a.code);
+          candidates.push(a);
+        }
+        if (candidates.length >= 200) break;
+      }
+    }
+
+    const sample = candidates.length > 200 ? candidates.slice(0, 200) : candidates;
+
+    // --- Search and score with country-unique top 5 ---
+    const seenCountries = new Set();
     const continentResults = {};
+    const MAX_COUNTRIES = 5;
+
     for (const dest of sample) {
+      if (seenCountries.size >= MAX_COUNTRIES) break;
+
+      const destCountry = dest.country || '';
+      if (destCountry && seenCountries.has(destCountry)) continue;
+
       try {
         const result = JSON.parse(state.kernel.searchRoutes(originCode, dest.code, 2));
         if (!result.paths || !result.paths.length) continue;
         const path = result.paths[0];
+        const dist = path.totalDistanceKm;
+        const efficiency = path.efficiency;
+        const reliability = efficiency * 100;
+        const score = (reliability / (dist + 1)) * 1000;
+
         const continent = getContinent(dest.lat, dest.lon);
         if (!continentResults[continent]) continentResults[continent] = [];
         continentResults[continent].push({
           code: dest.code,
           lat: dest.lat,
           lon: dest.lon,
-          distanceKm: path.totalDistanceKm,
-          efficiency: path.efficiency,
+          country: destCountry,
+          distanceKm: dist,
+          efficiency: efficiency,
+          score: score,
           hops: path.hops || path.legs || 0,
           route: path.airports ? path.airports.map(a => a.code).join(' → ') : originCode + ' → ' + dest.code
         });
+
+        if (destCountry) seenCountries.add(destCountry);
       } catch { /* skip */ }
     }
+
     for (const continent of Object.keys(continentResults)) {
-      continentResults[continent].sort((a, b) => b.efficiency - a.efficiency);
-      continentResults[continent] = continentResults[continent].slice(0, 3);
+      continentResults[continent].sort((a, b) => b.score - a.score);
+      const unique = [];
+      const countrySeen = new Set();
+      for (const item of continentResults[continent]) {
+        const c = item.country || item.code;
+        if (countrySeen.has(c)) continue;
+        countrySeen.add(c);
+        unique.push(item);
+        if (unique.length >= 5) break;
+      }
+      continentResults[continent] = unique;
     }
     return continentResults;
   }
@@ -517,7 +607,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bestFromResults.classList.add('loading');
     bestFromResults.innerHTML = '<div class="empty-state">계산 중...</div>';
     if (state.bestWorker) {
-      const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon }));
+      const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon, country: a.country || '' }));
       state.bestRequestId++;
       state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: fromCode, airports, continent });
     } else if (state.kernel) {
@@ -543,7 +633,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bestToResults.classList.add('loading');
     bestToResults.innerHTML = '<div class="empty-state">계산 중...</div>';
     if (state.bestWorker) {
-      const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon }));
+      const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon, country: a.country || '' }));
       state.bestRequestId++;
       state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: toCode, airports, continent });
     } else if (state.kernel) {

@@ -473,6 +473,9 @@ static void airports_handler(cwist_http_request *req, cwist_http_response *res) 
         cJSON_AddStringToObject(node, "code", code);
         cJSON_AddNumberToObject(node, "lat", g_state.store.airport_lat[i]);
         cJSON_AddNumberToObject(node, "lon", g_state.store.airport_lon[i]);
+        if (g_state.store.airport_countries) {
+            cJSON_AddStringToObject(node, "country", g_state.store.airport_countries[i]);
+        }
         cJSON_AddItemToArray(arr, node);
         emitted++;
     }

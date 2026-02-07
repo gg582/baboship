@@ -88,7 +88,7 @@ int nuke_store_load_from_blob(nuke_flight_store_t *store, const void *blob, size
     if (memcmp(p, "NUKE", 4) != 0) return NUKE_ERR_DATA;
     p += 4;
     uint32_t version = *(uint32_t *)p; p += 4;
-    if (version != 1) return NUKE_ERR_DATA;
+    if (version != 1 && version != 2) return NUKE_ERR_DATA;
     uint32_t airport_count = *(uint32_t *)p; p += 4;
     uint32_t route_count = *(uint32_t *)p; p += 4;
 
@@ -100,11 +100,19 @@ int nuke_store_load_from_blob(nuke_flight_store_t *store, const void *blob, size
     store->airport_lat = malloc(sizeof(double) * airport_count);
     store->airport_lon = malloc(sizeof(double) * airport_count);
     store->airport_codes = malloc(sizeof(char[4]) * airport_count);
+    store->airport_countries = malloc(sizeof(char[32]) * airport_count);
 
     memcpy(store->airport_ids, p, sizeof(int) * airport_count); p += sizeof(int) * airport_count;
     memcpy(store->airport_lat, p, sizeof(double) * airport_count); p += sizeof(double) * airport_count;
     memcpy(store->airport_lon, p, sizeof(double) * airport_count); p += sizeof(double) * airport_count;
     memcpy(store->airport_codes, p, sizeof(char[4]) * airport_count); p += sizeof(char[4]) * airport_count;
+
+    if (version >= 2) {
+        memcpy(store->airport_countries, p, sizeof(char[32]) * airport_count);
+        p += sizeof(char[32]) * airport_count;
+    } else {
+        memset(store->airport_countries, 0, sizeof(char[32]) * airport_count);
+    }
 
     store->route_offsets = malloc(sizeof(size_t) * airport_count);
     store->route_counts = malloc(sizeof(size_t) * airport_count);
@@ -273,6 +281,7 @@ static void reset_vertical_arrays(nuke_flight_store_t *store) {
     free(store->airport_lat);
     free(store->airport_lon);
     free(store->airport_codes);
+    free(store->airport_countries);
     free(store->route_offsets);
     free(store->route_counts);
     free(store->adj_route_ids);
@@ -286,6 +295,7 @@ static void reset_vertical_arrays(nuke_flight_store_t *store) {
     store->airport_lat = NULL;
     store->airport_lon = NULL;
     store->airport_codes = NULL;
+    store->airport_countries = NULL;
     store->route_count = 0;
     store->route_offsets = NULL;
     store->route_counts = NULL;
@@ -314,16 +324,18 @@ static int load_airports(nuke_flight_store_t *store) {
     store->airport_lat = ttak_mem_alloc(sizeof(double) * store->airport_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
     store->airport_lon = ttak_mem_alloc(sizeof(double) * store->airport_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
     store->airport_codes = ttak_mem_alloc(sizeof(char[4]) * store->airport_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
-    if (!store->airport_ids || !store->airport_lat || !store->airport_lon || !store->airport_codes) {
+    store->airport_countries = ttak_mem_alloc(sizeof(char[32]) * store->airport_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
+    if (!store->airport_ids || !store->airport_lat || !store->airport_lon || !store->airport_codes || !store->airport_countries) {
         return NUKE_ERR_INTERNAL;
     }
     ttak_mem_tree_add(&store->mem_tree, store->airport_ids, sizeof(int) * store->airport_count, 0, true);
     ttak_mem_tree_add(&store->mem_tree, store->airport_lat, sizeof(double) * store->airport_count, 0, true);
     ttak_mem_tree_add(&store->mem_tree, store->airport_lon, sizeof(double) * store->airport_count, 0, true);
     ttak_mem_tree_add(&store->mem_tree, store->airport_codes, sizeof(char[4]) * store->airport_count, 0, true);
+    ttak_mem_tree_add(&store->mem_tree, store->airport_countries, sizeof(char[32]) * store->airport_count, 0, true);
 
     sqlite3_stmt *stmt = NULL;
-    const char *sql = "SELECT id, code, latitude, longitude FROM airports ORDER BY id ASC;";
+    const char *sql = "SELECT id, code, latitude, longitude, COALESCE(country, '') FROM airports ORDER BY id ASC;";
     if (sqlite3_prepare_v2(store->nuke_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
         return NUKE_ERR_INTERNAL;
     }
@@ -334,6 +346,7 @@ static int load_airports(nuke_flight_store_t *store) {
         const unsigned char *code_txt = sqlite3_column_text(stmt, 1);
         double lat = sqlite3_column_double(stmt, 2);
         double lon = sqlite3_column_double(stmt, 3);
+        const unsigned char *country_txt = sqlite3_column_text(stmt, 4);
         store->airport_lat[idx] = lat;
         store->airport_lon[idx] = lon;
 
@@ -348,6 +361,11 @@ static int load_airports(nuke_flight_store_t *store) {
         store->airport_codes[idx][1] = code_buf[1];
         store->airport_codes[idx][2] = code_buf[2];
         store->airport_codes[idx][3] = '\0';
+
+        memset(store->airport_countries[idx], 0, 32);
+        if (country_txt) {
+            snprintf(store->airport_countries[idx], 32, "%s", (const char *)country_txt);
+        }
         ++idx;
     }
     sqlite3_finalize(stmt);
@@ -515,6 +533,22 @@ static void append_result_locked(nuke_worker_group_t *group,
     if (group->buffer->count >= group->buffer->capacity) {
         atomic_store(&group->stop, true);
         return;
+    }
+
+    // Deduplicate: skip if an identical airport sequence already exists
+    // (can happen with iterative deepening across transfer levels)
+    for (size_t e = 0; e < group->buffer->count; ++e) {
+        nuke_path_result_t *existing = &group->buffer->items[e];
+        if (existing->airport_count == frame->path_len) {
+            bool same = true;
+            for (size_t k = 0; k < frame->path_len; ++k) {
+                if (existing->airport_ids[k] != group->store->airport_ids[frame->airport_indices[k]]) {
+                    same = false;
+                    break;
+                }
+            }
+            if (same) return;
+        }
     }
 
     nuke_path_result_t *slot = &group->buffer->items[group->buffer->count++];

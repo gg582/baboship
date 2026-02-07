@@ -1,7 +1,7 @@
 /* Web Worker – computes best destinations off the main thread.
  *
  * The worker loads its own WASM instance so heavy computations
- * (up to 200 route searches) never block the UI.
+ * never block the UI.
  *
  * Protocol
  * --------
@@ -29,6 +29,16 @@ function getContinent(lat, lon) {
   return '기타';
 }
 
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371.0;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 async function initKernel() {
   const { default: createNukeKernel } = await import('./wasm/nuke_kernel.js');
   kernel = await createNukeKernel({
@@ -38,6 +48,7 @@ async function initKernel() {
   kernel.initStore = kernel.cwrap('nuke_wasm_init', 'number', []);
   kernel.searchRoutes = kernel.cwrap('nuke_wasm_search_routes_json', 'string', ['string', 'string', 'number']);
   kernel.loadData = kernel.cwrap('nuke_wasm_load_data', 'number', ['number', 'number']);
+  kernel.getDirectDests = kernel.cwrap('nuke_wasm_get_direct_destinations_json', 'string', ['string']);
 
   kernel.initStore();
 
@@ -56,42 +67,128 @@ function computeBestDestinations(originCode, airports, continentFilter) {
   const origin = airports.find(a => a.code === originCode);
   if (!origin) return {};
 
-  // Determine the target continent(s) to search
-  let targetContinent = continentFilter || null;
-  if (!targetContinent) {
-    // Default: same continent as the origin airport
-    targetContinent = getContinent(origin.lat, origin.lon);
+  const targetContinent = continentFilter || null;
+  const originContinent = getContinent(origin.lat, origin.lon);
+  const filterContinent = targetContinent || originContinent;
+  const originCountry = origin.country || '';
+
+  // --- Tier 1: Spatial filtering (bounding box 500km / 1000km) ---
+  const tier1Near = [];  // within 500km
+  const tier1Far = [];   // within 1000km (cross-continent)
+  for (const a of airports) {
+    if (a.code === originCode) continue;
+    if (getContinent(a.lat, a.lon) !== filterContinent) continue;
+    const dist = haversineKm(origin.lat, origin.lon, a.lat, a.lon);
+    if (dist <= 500) tier1Near.push(a);
+    else if (dist <= 1000) tier1Far.push(a);
   }
 
-  const candidates = airports.filter(a => {
-    if (a.code === originCode) return false;
-    return getContinent(a.lat, a.lon) === targetContinent;
-  });
+  // --- Tier 2: Hub-to-hub connectivity (direct flights) ---
+  const tier2Hubs = [];
+  try {
+    const directData = JSON.parse(kernel.getDirectDests(originCode));
+    const directDests = directData.destinations || [];
+    const HUB_MIN_CONNECTIONS = 30;
+    for (const d of directDests) {
+      if (getContinent(d.lat, d.lon) !== filterContinent) continue;
+      if (d.connections >= HUB_MIN_CONNECTIONS) {
+        const existing = airports.find(a => a.code === d.code);
+        if (existing) tier2Hubs.push(existing);
+      }
+    }
+  } catch { /* skip */ }
+
+  // --- Merge candidates, deduplicate ---
+  const seen = new Set();
+  const candidates = [];
+  for (const list of [tier1Near, tier2Hubs, tier1Far]) {
+    for (const a of list) {
+      if (!seen.has(a.code)) {
+        seen.add(a.code);
+        candidates.push(a);
+      }
+    }
+  }
+
+  // If too few candidates from tiers, fall back to broader sampling
+  if (candidates.length < 20) {
+    const remaining = airports.filter(a => {
+      if (a.code === originCode || seen.has(a.code)) return false;
+      return getContinent(a.lat, a.lon) === filterContinent;
+    });
+    for (const a of remaining) {
+      if (!seen.has(a.code)) {
+        seen.add(a.code);
+        candidates.push(a);
+      }
+      if (candidates.length >= 200) break;
+    }
+  }
+
+  // Cap at 200 for performance
   const sample = candidates.length > 200
-    ? candidates.filter((_, i) => i % Math.ceil(candidates.length / 200) === 0)
+    ? candidates.slice(0, 200)
     : candidates;
+
+  // --- Search routes and score ---
+  const seenCountries = new Set();
   const continentResults = {};
+  const MAX_COUNTRIES = 5;
+
   for (const dest of sample) {
+    // Early return: stop if we already have 5 distinct countries
+    if (seenCountries.size >= MAX_COUNTRIES) break;
+
+    const destCountry = dest.country || '';
+
+    // Skip if we already have an airport from this country
+    if (destCountry && seenCountries.has(destCountry)) continue;
+
     try {
       const result = JSON.parse(kernel.searchRoutes(originCode, dest.code, 2));
       if (!result.paths || !result.paths.length) continue;
       const path = result.paths[0];
+      const dist = path.totalDistanceKm;
+      const efficiency = path.efficiency;
+
+      // Weighted score: reliability / (distance + 1) * 1000
+      const reliability = efficiency * 100;
+      const score = (reliability / (dist + 1)) * 1000;
+
       const continent = getContinent(dest.lat, dest.lon);
       if (!continentResults[continent]) continentResults[continent] = [];
+
       continentResults[continent].push({
         code: dest.code,
         lat: dest.lat,
         lon: dest.lon,
-        distanceKm: path.totalDistanceKm,
-        efficiency: path.efficiency,
+        country: destCountry,
+        distanceKm: dist,
+        efficiency: efficiency,
+        score: score,
         hops: path.hops || path.legs || 0,
         route: path.airports ? path.airports.map(a => a.code).join(' → ') : originCode + ' → ' + dest.code
       });
+
+      if (destCountry) seenCountries.add(destCountry);
     } catch { /* skip */ }
   }
+
+  // Sort by weighted score (descending) and keep top 5 with unique countries
   for (const continent of Object.keys(continentResults)) {
-    continentResults[continent].sort((a, b) => b.efficiency - a.efficiency);
-    continentResults[continent] = continentResults[continent].slice(0, 3);
+    continentResults[continent].sort((a, b) => b.score - a.score);
+
+    // Deduplicate by country within each continent
+    const unique = [];
+    const countrySeen = new Set();
+    for (const item of continentResults[continent]) {
+      const c = item.country || item.code;
+      if (countrySeen.has(c)) continue;
+      countrySeen.add(c);
+      unique.push(item);
+      if (unique.length >= 5) break;
+    }
+    continentResults[continent] = unique;
   }
   return continentResults;
 }

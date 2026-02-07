@@ -75,6 +75,7 @@ struct nuke_flight_store {
     double *airport_lat;
     double *airport_lon;
     char (*airport_codes)[4];
+    char (*airport_countries)[32];
 
     // Code lookup hash
     uint32_t *code_keys;

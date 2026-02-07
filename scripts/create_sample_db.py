@@ -3,11 +3,11 @@ import sqlite3
 from pathlib import Path
 
 AIRPORTS = [
-    (1, "JFK", "New York JFK", 40.6413, -73.7781),
-    (2, "LHR", "London Heathrow", 51.4700, -0.4543),
-    (3, "FRA", "Frankfurt", 50.0379, 8.5622),
-    (4, "ICN", "Seoul Incheon", 37.4602, 126.4407),
-    (5, "SIN", "Singapore Changi", 1.3644, 103.9915),
+    (1, "JFK", "New York JFK", "United States", 40.6413, -73.7781),
+    (2, "LHR", "London Heathrow", "United Kingdom", 51.4700, -0.4543),
+    (3, "FRA", "Frankfurt", "Germany", 50.0379, 8.5622),
+    (4, "ICN", "Seoul Incheon", "South Korea", 37.4602, 126.4407),
+    (5, "SIN", "Singapore Changi", "Singapore", 1.3644, 103.9915),
 ]
 
 ROUTES = [
@@ -24,12 +24,15 @@ ROUTES = [
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
+    cur.execute("DROP TABLE IF EXISTS routes;")
+    cur.execute("DROP TABLE IF EXISTS airports;")
     cur.execute(
         """
-        CREATE TABLE IF NOT EXISTS airports (
+        CREATE TABLE airports (
             id INTEGER PRIMARY KEY,
             code TEXT NOT NULL,
             name TEXT NOT NULL,
+            country TEXT DEFAULT '',
             latitude REAL NOT NULL,
             longitude REAL NOT NULL
         );
@@ -55,7 +58,7 @@ def fill_sample(conn: sqlite3.Connection) -> None:
     cur.execute("DELETE FROM routes;")
     cur.execute("DELETE FROM airports;")
     cur.executemany(
-        "INSERT INTO airports (id, code, name, latitude, longitude) VALUES (?, ?, ?, ?, ?);",
+        "INSERT INTO airports (id, code, name, country, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?);",
         AIRPORTS,
     )
     cur.executemany(

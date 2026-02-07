@@ -50,7 +50,7 @@ const char* nuke_wasm_get_airports_json(void) {
     static char *buffer = NULL;
     static size_t buffer_size = 0;
     
-    size_t needed = 128 + g_store.airport_count * 128;
+    size_t needed = 128 + g_store.airport_count * 192;
     if (buffer_size < needed) {
         buffer = realloc(buffer, needed);
         buffer_size = needed;
@@ -59,13 +59,15 @@ const char* nuke_wasm_get_airports_json(void) {
     size_t offset = 0;
     offset += sprintf(buffer + offset, "{\"total\":%zu,\"airports\":[", g_store.airport_count);
     for (size_t i = 0; i < g_store.airport_count; ++i) {
+        const char *country = g_store.airport_countries ? g_store.airport_countries[i] : "";
         offset += sprintf(buffer + offset, 
-            "%s{\"id\":%d,\"code\":\"%s\",\"lat\":%.4f,\"lon\":%.4f}",
+            "%s{\"id\":%d,\"code\":\"%s\",\"lat\":%.4f,\"lon\":%.4f,\"country\":\"%s\"}",
             (i == 0 ? "" : ","),
             g_store.airport_ids[i],
             g_store.airport_codes[i],
             g_store.airport_lat[i],
-            g_store.airport_lon[i]
+            g_store.airport_lon[i],
+            country
         );
     }
     sprintf(buffer + offset, "]}");
@@ -215,7 +217,7 @@ const char* nuke_wasm_get_direct_destinations_json(const char *code) {
 
     static char *buffer = NULL;
     static size_t buffer_size = 0;
-    size_t needed = 128 + cnt * 80;
+    size_t needed = 128 + cnt * 128;
     if (buffer_size < needed) {
         char *tmp = realloc(buffer, needed);
         if (!tmp) return "{\"destinations\":[]}";
@@ -230,15 +232,17 @@ const char* nuke_wasm_get_direct_destinations_json(const char *code) {
         size_t dst_idx = g_store.adj_dst_indices[off + i];
         if (dst_idx >= g_store.airport_count) continue;
         double dist = g_store.adj_distance[off + i];
+        const char *country = g_store.airport_countries ? g_store.airport_countries[dst_idx] : "";
         size_t rem = buffer_size - offset;
         offset += snprintf(buffer + offset, rem,
-            "%s{\"code\":\"%s\",\"lat\":%.4f,\"lon\":%.4f,\"distKm\":%.1f,\"connections\":%zu}",
+            "%s{\"code\":\"%s\",\"lat\":%.4f,\"lon\":%.4f,\"distKm\":%.1f,\"connections\":%zu,\"country\":\"%s\"}",
             (emitted == 0 ? "" : ","),
             g_store.airport_codes[dst_idx],
             g_store.airport_lat[dst_idx],
             g_store.airport_lon[dst_idx],
             dist,
-            g_store.route_counts[dst_idx]);
+            g_store.route_counts[dst_idx],
+            country);
         emitted++;
     }
     snprintf(buffer + offset, buffer_size - offset, "]}");
