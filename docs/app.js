@@ -72,13 +72,13 @@ async function initWasm() {
 async function initServiceWorker() {
   if ('serviceWorker' in navigator) {
     try {
-      const reg = await navigator.serviceWorker.register('./sw.js', {
+      await navigator.serviceWorker.register('./sw.js', {
         scope: './',
         type: 'module'
       });
-      // Wait for SW to be active
-      if (reg.installing) await new Promise(r => reg.installing.addEventListener('statechange', (e) => { if (e.target.state === 'activated') r(); }));
-      console.log('Service Worker ready at scope:', reg.scope);
+      // Wait for SW to be active and controlling this page
+      await navigator.serviceWorker.ready;
+      console.log('Service Worker ready at scope:', navigator.serviceWorker.controller?.scriptURL);
     } catch (err) {
       console.warn('Service Worker failed:', err);
     }
@@ -202,7 +202,11 @@ document.addEventListener('DOMContentLoaded', () => {
       // Witty Interception: This fetch is intercepted by sw.js
       const response = await fetch('./airports?limit=1024');
       const data = await response.json();
-      state.airports = data.airports.map(a => ({ ...a, ...projectPoint(a.lon, a.lat) }));
+      if (!response.ok) {
+        throw new Error(data.error || '공항 데이터를 불러오지 못했습니다.');
+      }
+      const airports = Array.isArray(data.airports) ? data.airports : [];
+      state.airports = airports.map(a => ({ ...a, ...projectPoint(a.lon, a.lat) }));
       state.airportMap = new Map(state.airports.map(a => [a.code, a]));
       statAirports.textContent = state.airports.length.toLocaleString();
       loader.style.display = 'none';

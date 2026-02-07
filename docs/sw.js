@@ -46,9 +46,7 @@ self.addEventListener('fetch', (event) => {
 
   if (path === '/airports') {
     event.respondWith(handleAirports(url));
-  } else {
-    // Let other requests pass through (including WASM logic if needed, 
-    // but here we focus on the JSON interception for airports)
-    event.respondWith(fetch(event.request));
   }
+  // All other requests (wasm files, static assets, etc.) are handled by the
+  // browser's default fetch – no event.respondWith() call needed.
 });

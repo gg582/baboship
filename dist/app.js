@@ -14,7 +14,7 @@ async function initWasm() {
     const { default: createNukeKernel } = await import('./wasm/nuke_kernel.js');
     console.log('Creating WASM Kernel...');
     state.kernel = await createNukeKernel({
-      locateFile: (path) => `wasm/${path}`
+      locateFile: (path) => `./wasm/${path}`
     });
 
     if (!state.kernel.cwrap) {

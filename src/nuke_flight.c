@@ -112,11 +112,25 @@ int nuke_store_load_from_blob(nuke_flight_store_t *store, const void *blob, size
     store->adj_dst_indices = malloc(sizeof(size_t) * route_count);
     store->adj_distance = malloc(sizeof(double) * route_count);
 
-    // Read routes
-    memcpy(store->route_offsets, p, sizeof(uint32_t) * airport_count); p += sizeof(uint32_t) * airport_count;
-    memcpy(store->route_counts, p, sizeof(uint32_t) * airport_count); p += sizeof(uint32_t) * airport_count;
+    // Read routes – blob stores uint32_t but struct uses size_t; widen
+    // element-by-element to stay correct regardless of sizeof(size_t).
+    {
+        const uint32_t *u32p;
+
+        u32p = (const uint32_t *)p;
+        for (uint32_t i = 0; i < airport_count; ++i) store->route_offsets[i] = u32p[i];
+        p += sizeof(uint32_t) * airport_count;
+
+        u32p = (const uint32_t *)p;
+        for (uint32_t i = 0; i < airport_count; ++i) store->route_counts[i] = u32p[i];
+        p += sizeof(uint32_t) * airport_count;
+    }
     memcpy(store->adj_route_ids, p, sizeof(int) * route_count); p += sizeof(int) * route_count;
-    memcpy(store->adj_dst_indices, p, sizeof(uint32_t) * route_count); p += sizeof(uint32_t) * route_count;
+    {
+        const uint32_t *u32p = (const uint32_t *)p;
+        for (uint32_t i = 0; i < route_count; ++i) store->adj_dst_indices[i] = u32p[i];
+        p += sizeof(uint32_t) * route_count;
+    }
     memcpy(store->adj_distance, p, sizeof(double) * route_count); p += sizeof(double) * route_count;
 
     // Rebuild code hash
