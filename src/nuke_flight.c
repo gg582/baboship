@@ -706,70 +706,77 @@ int nuke_search_routes(nuke_flight_store_t *store,
         return CWIST_NUKE_OK;
     }
 
+    // Iterative deepening: search from 0 transfers up to max_transfers.
+    // This ensures direct flights are discovered first and fill the buffer
+    // before longer multi-hop routes are explored.
+    for (size_t t = 0; t <= max_transfers; ++t) {
+        if (buffer->count >= max_results) break;
+
 #ifdef __EMSCRIPTEN__
-    nuke_worker_group_t group = {
-        .store = store,
-        .buffer = buffer,
-        .max_results = max_results,
-        .max_legs = max_transfers + 1,
-        .dst_idx = dst_idx,
-        .src_idx = src_idx,
-        .gc_distance = gc
-    };
-    atomic_store(&group.pending_jobs, 0);
-    atomic_store(&group.stop, false);
+        nuke_worker_group_t group = {
+            .store = store,
+            .buffer = buffer,
+            .max_results = max_results,
+            .max_legs = t + 1,
+            .dst_idx = dst_idx,
+            .src_idx = src_idx,
+            .gc_distance = gc
+        };
+        atomic_store(&group.pending_jobs, 0);
+        atomic_store(&group.stop, false);
 
-    size_t start = store->route_offsets[src_idx];
-    for (size_t i = 0; i < degree; ++i) {
-        if (atomic_load(&group.stop)) break;
-        nuke_worker_job_t *pjob = malloc(sizeof(nuke_worker_job_t));
-        pjob->group = &group;
-        pjob->adj_index = start + i;
-        worker_execute(pjob);
-    }
-#else
-    nuke_worker_group_t group = {
-        .store = store,
-        .buffer = buffer,
-        .max_results = max_results,
-        .max_legs = max_transfers + 1,
-        .dst_idx = dst_idx,
-        .src_idx = src_idx,
-        .gc_distance = gc
-    };
-    pthread_mutex_init(&group.buffer_lock, NULL);
-    pthread_mutex_init(&group.wait_lock, NULL);
-    pthread_cond_init(&group.wait_cond, NULL);
-    atomic_store(&group.pending_jobs, 0);
-    atomic_store(&group.stop, false);
-
-    size_t start = store->route_offsets[src_idx];
-    size_t jobs = degree;
-    for (size_t i = 0; i < jobs; ++i) {
-        uint64_t job_now = ttak_get_tick_count();
-        nuke_worker_job_t *job = ttak_mem_alloc(sizeof(nuke_worker_job_t),
-                                                __TTAK_UNSAFE_MEM_FOREVER__,
-                                                job_now);
-        if (!job) continue;
-        job->group = &group;
-        job->adj_index = start + i;
-        atomic_fetch_add(&group.pending_jobs, 1);
-        if (!cwist_io_queue_submit(store->worker_queue, worker_execute, job)) {
-            ttak_mem_free(job);
-            atomic_fetch_sub(&group.pending_jobs, 1);
+        size_t start = store->route_offsets[src_idx];
+        for (size_t i = 0; i < degree; ++i) {
+            if (atomic_load(&group.stop)) break;
+            nuke_worker_job_t *pjob = malloc(sizeof(nuke_worker_job_t));
+            pjob->group = &group;
+            pjob->adj_index = start + i;
+            worker_execute(pjob);
         }
-    }
+#else
+        nuke_worker_group_t group = {
+            .store = store,
+            .buffer = buffer,
+            .max_results = max_results,
+            .max_legs = t + 1,
+            .dst_idx = dst_idx,
+            .src_idx = src_idx,
+            .gc_distance = gc
+        };
+        pthread_mutex_init(&group.buffer_lock, NULL);
+        pthread_mutex_init(&group.wait_lock, NULL);
+        pthread_cond_init(&group.wait_cond, NULL);
+        atomic_store(&group.pending_jobs, 0);
+        atomic_store(&group.stop, false);
 
-    pthread_mutex_lock(&group.wait_lock);
-    while (atomic_load(&group.pending_jobs) > 0) {
-        pthread_cond_wait(&group.wait_cond, &group.wait_lock);
-    }
-    pthread_mutex_unlock(&group.wait_lock);
+        size_t start = store->route_offsets[src_idx];
+        size_t jobs = degree;
+        for (size_t i = 0; i < jobs; ++i) {
+            uint64_t job_now = ttak_get_tick_count();
+            nuke_worker_job_t *job = ttak_mem_alloc(sizeof(nuke_worker_job_t),
+                                                    __TTAK_UNSAFE_MEM_FOREVER__,
+                                                    job_now);
+            if (!job) continue;
+            job->group = &group;
+            job->adj_index = start + i;
+            atomic_fetch_add(&group.pending_jobs, 1);
+            if (!cwist_io_queue_submit(store->worker_queue, worker_execute, job)) {
+                ttak_mem_free(job);
+                atomic_fetch_sub(&group.pending_jobs, 1);
+            }
+        }
 
-    pthread_mutex_destroy(&group.buffer_lock);
-    pthread_mutex_destroy(&group.wait_lock);
-    pthread_cond_destroy(&group.wait_cond);
+        pthread_mutex_lock(&group.wait_lock);
+        while (atomic_load(&group.pending_jobs) > 0) {
+            pthread_cond_wait(&group.wait_cond, &group.wait_lock);
+        }
+        pthread_mutex_unlock(&group.wait_lock);
+
+        pthread_mutex_destroy(&group.buffer_lock);
+        pthread_mutex_destroy(&group.wait_lock);
+        pthread_cond_destroy(&group.wait_cond);
 #endif
+    }
 
     if (buffer->count > 1) {
         qsort(buffer->items, buffer->count, sizeof(nuke_path_result_t), compare_efficiency);
