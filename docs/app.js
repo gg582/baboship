@@ -5,7 +5,9 @@ const state = {
   activeField: 'from',
   selection: { from: null, to: null },
   best: [],
-  kernel: null
+  kernel: null,
+  bestWorker: null,
+  bestRequestId: 0
 };
 
 // WASM Module Loader
@@ -110,13 +112,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const swapBtn = document.getElementById('swap-btn');
   const searchBtn = document.getElementById('search-btn');
   const modeButtons = document.querySelectorAll('.map-mode button');
-  const bestFromSection = document.getElementById('best-from-section');
-  const bestToSection = document.getElementById('best-to-section');
   const bestFromTitle = document.getElementById('best-from-title');
   const bestToTitle = document.getElementById('best-to-title');
   const bestFromResults = document.getElementById('best-from-results');
   const bestToResults = document.getElementById('best-to-results');
-  const bestRefreshBtn = document.getElementById('best-refresh-btn');
+  const bestFromRefreshBtn = document.getElementById('best-from-refresh-btn');
+  const bestToRefreshBtn = document.getElementById('best-to-refresh-btn');
   const mapModal = document.getElementById('map-modal');
   const modalCanvas = document.getElementById('route-map-large');
   const modalCloseBtn = document.getElementById('map-modal-close');
@@ -268,7 +269,6 @@ document.addEventListener('DOMContentLoaded', () => {
     selectionFrom.textContent = state.selection.from?.code || '--';
     selectionTo.textContent = state.selection.to?.code || '--';
     drawAllScenes();
-    refreshBestSections();
   }
 
   async function fetchAirports() {
@@ -321,7 +321,6 @@ document.addEventListener('DOMContentLoaded', () => {
       `).join('') || '<div class="empty-state">경로 없음</div>';
       statusEl.textContent = `분석 완료: ${state.routes.length}개 발견`;
       drawAllScenes();
-      refreshBestSections();
     } catch (err) { statusEl.textContent = '오류: ' + err.message; }
   }
 
@@ -405,52 +404,6 @@ document.addEventListener('DOMContentLoaded', () => {
   searchBtn.addEventListener('click', searchRoutes);
   window.addEventListener('resize', resizeAllCanvases);
 
-  function getContinent(lat, lon) {
-    if (lat >= 7 && lat <= 84 && lon >= -170 && lon <= -50) return '북미';
-    if (lat < 7 && lat >= -60 && lon >= -100 && lon <= -30) return '남미';
-    if (lat < -15 && lon >= 100 && lon <= 180) return '오세아니아';
-    if (lat >= 35 && lon >= -15 && lon <= 60) return '유럽';
-    if (lat < 35 && lat >= -40 && lon >= -20 && lon <= 55) return '아프리카';
-    if (lat >= -15 && lon >= 25 && lon <= 55) return '중동';
-    if (lat >= -15 && lon > 55 && lon <= 180) return '아시아';
-    if (lat >= 5 && lon >= 25 && lon <= 180) return '아시아';
-    return '기타';
-  }
-
-  function computeBestDestinations(originCode) {
-    if (!state.kernel || state.airports.length === 0) return {};
-    const origin = state.airportMap.get(originCode);
-    if (!origin) return {};
-    const candidates = state.airports.filter(a => a.code !== originCode);
-    const sample = candidates.length > 200
-      ? candidates.filter((_, i) => i % Math.ceil(candidates.length / 200) === 0)
-      : candidates;
-    const continentResults = {};
-    for (const dest of sample) {
-      try {
-        const result = JSON.parse(state.kernel.searchRoutes(originCode, dest.code, 2));
-        if (!result.paths || !result.paths.length) continue;
-        const path = result.paths[0];
-        const continent = getContinent(dest.lat, dest.lon);
-        if (!continentResults[continent]) continentResults[continent] = [];
-        continentResults[continent].push({
-          code: dest.code,
-          lat: dest.lat,
-          lon: dest.lon,
-          distanceKm: path.totalDistanceKm,
-          efficiency: path.efficiency,
-          hops: path.hops || path.legs || 0,
-          route: path.airports ? path.airports.map(a => a.code).join(' → ') : originCode + ' → ' + dest.code
-        });
-      } catch { /* skip */ }
-    }
-    for (const continent of Object.keys(continentResults)) {
-      continentResults[continent].sort((a, b) => b.efficiency - a.efficiency);
-      continentResults[continent] = continentResults[continent].slice(0, 3);
-    }
-    return continentResults;
-  }
-
   function renderBestDestinations(container, data) {
     container.innerHTML = '';
     container.className = 'best-continent-container';
@@ -499,46 +452,82 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  async function refreshBestSections() {
+  function requestBestFrom() {
+    if (!state.bestWorker) return;
     const fromCode = fromInput.value.trim().toUpperCase();
+    const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon }));
+    if (fromCode.length !== 3 || !state.airportMap.has(fromCode)) {
+      bestFromResults.innerHTML = '<div class="empty-state">유효한 3자리 IATA 코드를 입력하세요.</div>';
+      return;
+    }
+    bestFromTitle.textContent = fromCode + '에서 최적 목적지';
+    bestFromResults.classList.add('loading');
+    bestFromResults.innerHTML = '<div class="empty-state">계산 중...</div>';
+    state.bestRequestId++;
+    state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: fromCode, airports });
+  }
+
+  function requestBestTo() {
+    if (!state.bestWorker) return;
     const toCode = toInput.value.trim().toUpperCase();
-    if (fromCode.length === 3 && state.airportMap.has(fromCode)) {
-      bestFromSection.style.display = '';
-      bestFromTitle.textContent = fromCode + '에서 최적 목적지';
-      bestFromResults.classList.add('loading');
-      await new Promise(r => setTimeout(r, 30));
-      const fromData = computeBestDestinations(fromCode);
-      renderBestDestinations(bestFromResults, fromData);
-      bestFromResults.classList.remove('loading');
-    } else {
-      bestFromSection.style.display = 'none';
+    const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon }));
+    if (toCode.length !== 3 || !state.airportMap.has(toCode)) {
+      bestToResults.innerHTML = '<div class="empty-state">유효한 3자리 IATA 코드를 입력하세요.</div>';
+      return;
     }
-    if (toCode.length === 3 && state.airportMap.has(toCode)) {
-      bestToSection.style.display = '';
-      bestToTitle.textContent = toCode + '에서 최적 목적지';
-      bestToResults.classList.add('loading');
-      await new Promise(r => setTimeout(r, 30));
-      const toData = computeBestDestinations(toCode);
-      renderBestDestinations(bestToResults, toData);
-      bestToResults.classList.remove('loading');
-    } else {
-      bestToSection.style.display = 'none';
-    }
+    bestToTitle.textContent = toCode + '에서 최적 목적지';
+    bestToResults.classList.add('loading');
+    bestToResults.innerHTML = '<div class="empty-state">계산 중...</div>';
+    state.bestRequestId++;
+    state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: toCode, airports });
   }
 
   async function init() {
     await initServiceWorker();
     await initWasm();
     await fetchAirports();
+
+    // Start the best-destinations Web Worker (separate WASM instance)
+    try {
+      state.bestWorker = new Worker('./best-worker.js', { type: 'module' });
+      state.bestWorker.onmessage = (e) => {
+        const msg = e.data;
+        if (msg.type === 'init') {
+          if (msg.ok) console.log('Best-destinations worker ready');
+          else console.warn('Best-destinations worker init failed:', msg.error);
+          return;
+        }
+        if (msg.type === 'result') {
+          const fromCode = fromInput.value.trim().toUpperCase();
+          const toCode = toInput.value.trim().toUpperCase();
+          if (msg.originCode === fromCode) {
+            renderBestDestinations(bestFromResults, msg.data);
+            bestFromResults.classList.remove('loading');
+          }
+          if (msg.originCode === toCode) {
+            renderBestDestinations(bestToResults, msg.data);
+            bestToResults.classList.remove('loading');
+          }
+          return;
+        }
+        if (msg.type === 'error') {
+          console.warn('Best-destinations worker error:', msg.error);
+        }
+      };
+      state.bestWorker.postMessage({ type: 'init' });
+    } catch (err) {
+      console.warn('Web Worker not available:', err);
+    }
+
     if (state.kernel) {
       const h = JSON.parse(state.kernel.getHealth());
       statRoutes.textContent = h.routes_loaded.toLocaleString();
       statWorkers.textContent = 'WASM-Serverless';
-      await refreshBestSections();
     }
   }
 
-  bestRefreshBtn.addEventListener('click', refreshBestSections);
+  bestFromRefreshBtn.addEventListener('click', requestBestFrom);
+  bestToRefreshBtn.addEventListener('click', requestBestTo);
 
   resizeAllCanvases();
   init();
