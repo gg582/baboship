@@ -95,12 +95,11 @@ function computeBestDestinations(originCode, airports, continentFilter) {
     for (const d of directDests) {
       if (getContinent(d.lat, d.lon) !== filterContinent) continue;
       // Skip domestic (same-country) destinations
-      const destAirport = d.country ? null : airportByCode.get(d.code);
+      const destAirport = airportByCode.get(d.code);
       const destCountry = d.country || destAirport?.country || '';
       if (originCountry && destCountry && destCountry === originCountry) continue;
       if (d.connections >= HUB_MIN_CONNECTIONS) {
-        const existing = destAirport || airportByCode.get(d.code);
-        if (existing) tier2Hubs.push(existing);
+        if (destAirport) tier2Hubs.push(destAirport);
       }
     }
   } catch { /* skip */ }
