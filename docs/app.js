@@ -201,10 +201,10 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       // Witty Interception: This fetch is intercepted by sw.js
       const response = await fetch('./airports?limit=1024');
-      const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || '공항 데이터를 불러오지 못했습니다.');
+        throw new Error('공항 데이터를 불러오지 못했습니다.');
       }
+      const data = await response.json();
       const airports = Array.isArray(data.airports) ? data.airports : [];
       state.airports = airports.map(a => ({ ...a, ...projectPoint(a.lon, a.lat) }));
       state.airportMap = new Map(state.airports.map(a => [a.code, a]));
