@@ -64,7 +64,8 @@ async function initKernel() {
 
 function computeBestDestinations(originCode, airports, continentFilter) {
   if (!kernel || !airports.length) return {};
-  const origin = airports.find(a => a.code === originCode);
+  const airportByCode = new Map(airports.map(a => [a.code, a]));
+  const origin = airportByCode.get(originCode);
   if (!origin) return {};
 
   const targetContinent = continentFilter || null;
@@ -94,10 +95,11 @@ function computeBestDestinations(originCode, airports, continentFilter) {
     for (const d of directDests) {
       if (getContinent(d.lat, d.lon) !== filterContinent) continue;
       // Skip domestic (same-country) destinations
-      if (originCountry && d.country && d.country === originCountry) continue;
+      const destAirport = airportByCode.get(d.code);
+      const destCountry = d.country || destAirport?.country || '';
+      if (originCountry && destCountry && destCountry === originCountry) continue;
       if (d.connections >= HUB_MIN_CONNECTIONS) {
-        const existing = airports.find(a => a.code === d.code);
-        if (existing) tier2Hubs.push(existing);
+        if (destAirport) tier2Hubs.push(destAirport);
       }
     }
   } catch { /* skip */ }

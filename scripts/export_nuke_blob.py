@@ -31,7 +31,6 @@ def export_db(db_path, out_path):
     airport_codes = []
     airport_lats = []
     airport_lons = []
-    airport_countries = []
     for a in airports:
         airport_ids.append(a[0])
         code = (a[1][:3].upper() + '\0').encode('ascii')
@@ -40,9 +39,6 @@ def export_db(db_path, out_path):
         airport_codes.append(code)
         airport_lats.append(a[2])
         airport_lons.append(a[3])
-        country = (a[4] if len(a) > 4 else "")[:31]
-        country_bytes = country.encode('utf-8')[:31].ljust(32, b'\0')
-        airport_countries.append(country_bytes)
 
     route_offsets = [0] * airport_count
     route_counts = [0] * airport_count
@@ -75,7 +71,7 @@ def export_db(db_path, out_path):
     with open(out_path, 'wb') as f:
         # Header
         f.write(b'NUKE')
-        f.write(struct.pack('<I', 2)) # Version 2: includes country
+        f.write(struct.pack('<I', 1)) # Version 1: airport metadata only
         f.write(struct.pack('<I', airport_count))
         f.write(struct.pack('<I', actual_route_count))
 
@@ -85,8 +81,6 @@ def export_db(db_path, out_path):
         f.write(struct.pack(f'<{airport_count}d', *airport_lons))
         for code in airport_codes:
             f.write(code)
-        for country in airport_countries:
-            f.write(country)
 
         # Routes
         f.write(struct.pack(f'<{airport_count}I', *route_offsets))
