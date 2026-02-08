@@ -5,8 +5,22 @@ const state = {
   activeField: 'from',
   selection: { from: null, to: null },
   best: [],
-  kernel: null
+  kernel: null,
+  bestWorker: null,
+  bestRequestId: 0,
+  isMobile: false
 };
+
+// Mobile device detection
+function detectMobile() {
+  const userAgent = navigator.userAgent || navigator.vendor || window.opera;
+  // Check for mobile user agents
+  const mobileRegex = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile|tablet/i;
+  // Also check for touch support and screen size
+  const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  const isSmallScreen = window.innerWidth <= 768;
+  return mobileRegex.test(userAgent.toLowerCase()) || (hasTouch && isSmallScreen);
+}
 
 // WASM Module Loader
 async function initWasm() {
@@ -16,11 +30,10 @@ async function initWasm() {
     state.kernel = await createNukeKernel({
       locateFile: (path) => `./wasm/${path}`
     });
-
+    
     if (!state.kernel.cwrap) {
       console.error('WASM Kernel loaded but cwrap is missing. Check EXPORTED_RUNTIME_METHODS.');
-      state.kernel = null;
-      return;
+      throw new Error('cwrap missing');
     }
 
     // Bind WASM functions via cwrap (wraps C-exported symbols)
@@ -31,17 +44,16 @@ async function initWasm() {
     state.kernel.getHealth = state.kernel.cwrap('nuke_wasm_get_health_json', 'string', []);
     state.kernel.searchRoutes = state.kernel.cwrap('nuke_wasm_search_routes_json', 'string', ['string', 'string', 'number']);
     state.kernel.calcScore = state.kernel.cwrap('nuke_wasm_calc_score', 'number', ['number', 'number', 'number', 'number', 'number']);
+    state.kernel.getDirectDests = state.kernel.cwrap('nuke_wasm_get_direct_destinations_json', 'string', ['string']);
 
     // cwrap returns the raw function for numeric-only signatures; fall back to
     // the underscore-prefixed direct export when the symbol is present but
-    // cwrap could not resolve it.
+    // cwrap could not resolve it (e.g. after streaming-compile race).
     if (typeof state.kernel.initStore !== 'function') {
       if (typeof state.kernel._nuke_wasm_init === 'function') {
         state.kernel.initStore = state.kernel._nuke_wasm_init;
       } else {
-        console.error('initStore is not a function - symbol might be missing in WASM exports');
-        state.kernel = null;
-        return;
+        throw new Error('initStore is not a function - symbol might be missing in WASM exports');
       }
     }
 
@@ -49,45 +61,41 @@ async function initWasm() {
 
     // Load main routes/graph blob
     const response = await fetch('./wasm/nuke_blob.bin');
-    if (response.ok) {
-      const blobArrayBuffer = await response.arrayBuffer();
-      const uint8Array = new Uint8Array(blobArrayBuffer);
-      if (state.kernel._malloc) {
-        const ptr = state.kernel._malloc(uint8Array.length);
-        if (!state.kernel.HEAPU8) {
-          throw new Error('HEAPU8 is not available on WASM module');
-        }
-        state.kernel.HEAPU8.set(uint8Array, ptr);
-        state.kernel.loadData(ptr, uint8Array.length);
-        state.kernel._free(ptr);
+    if (!response.ok) throw new Error('Failed to fetch data blob');
+    const blobArrayBuffer = await response.arrayBuffer();
+    const uint8Array = new Uint8Array(blobArrayBuffer);
+    
+    if (state.kernel._malloc) {
+      const ptr = state.kernel._malloc(uint8Array.length);
+      if (!state.kernel.HEAPU8) {
+        throw new Error('HEAPU8 is not available on WASM module');
       }
+      state.kernel.HEAPU8.set(uint8Array, ptr);
+      state.kernel.loadData(ptr, uint8Array.length);
+      state.kernel._free(ptr);
+    } else {
+      console.warn('WASM _malloc not found, using alternative or data might not be loaded');
     }
-
-    console.log('WASM Kernel initialized');
+    
+    console.log('WASM Kernel initialized successfully');
   } catch (err) {
-    console.warn('WASM Kernel failed to load:', err);
+    console.error('WASM Kernel failed to load:', err);
     state.kernel = null;
   }
 }
 
-// Service Worker Registration for WASM Server
 async function initServiceWorker() {
   if ('serviceWorker' in navigator) {
     try {
-      const registration = await navigator.serviceWorker.register('sw.js', {
+      await navigator.serviceWorker.register('./sw.js', {
         scope: './',
         type: 'module'
       });
-      console.log('Service Worker registered with scope:', registration.scope);
-      
-      // Wait for SW to be ready
+      // Wait for SW to be active and controlling this page
       await navigator.serviceWorker.ready;
-      
-      // Refresh data after SW is active
-      fetchBest();
-      fetchHealth();
+      console.log('Service Worker ready at scope:', navigator.serviceWorker.controller?.scriptURL);
     } catch (err) {
-      console.error('Service Worker registration failed:', err);
+      console.warn('Service Worker failed:', err);
     }
   }
 }
@@ -101,9 +109,6 @@ const continentShapes = [
 ];
 
 document.addEventListener('DOMContentLoaded', () => {
-  initWasm();
-  initServiceWorker();
-
   const mainCanvas = document.getElementById('route-map');
   const loader = document.getElementById('map-loader');
   const statusEl = document.getElementById('map-status');
@@ -120,13 +125,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const swapBtn = document.getElementById('swap-btn');
   const searchBtn = document.getElementById('search-btn');
   const modeButtons = document.querySelectorAll('.map-mode button');
-  const bestFromSection = document.getElementById('best-from-section');
-  const bestToSection = document.getElementById('best-to-section');
   const bestFromTitle = document.getElementById('best-from-title');
   const bestToTitle = document.getElementById('best-to-title');
   const bestFromResults = document.getElementById('best-from-results');
   const bestToResults = document.getElementById('best-to-results');
-  const bestRefreshBtn = document.getElementById('best-refresh-btn');
   const bestFromRefreshBtn = document.getElementById('best-from-refresh-btn');
   const bestToRefreshBtn = document.getElementById('best-to-refresh-btn');
   const bestFromContinentSelect = document.getElementById('best-from-continent');
@@ -135,508 +137,336 @@ document.addEventListener('DOMContentLoaded', () => {
   const modalCanvas = document.getElementById('route-map-large');
   const modalCloseBtn = document.getElementById('map-modal-close');
 
-  const projectPoint = (lon, lat) => ({ u: (lon + 180) / 360, v: (90 - lat) / 180 });
-  const view = {
-    zoom: 1,
-    minZoom: 1,
-    maxZoom: 5,
-    centerX: 0.5,
-    centerY: 0.5
+  const projectPoint = (lon, lat) => {
+    const u = (lon + 180) / 360;
+    // Clamp latitude to Web Mercator bounds (±85.051129°) to avoid singularity at poles
+    const clampedLat = Math.max(-85.051129, Math.min(85.051129, lat));
+    const latRad = clampedLat * Math.PI / 180;
+    const v = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2;
+    return { u, v };
   };
-  let statusBeforeModal = '';
-  const dragState = {
-    active: false,
-    pointerId: null,
-    lastX: 0,
-    lastY: 0,
-    moved: false,
-    blockClick: false
-  };
-  const modalHintMessage = '크게보기 모드: 드래그로 이동하고 클릭해서 공항을 지정하세요. X 버튼으로 닫습니다.';
-  const mapCanvases = new Map();
+  const view = { zoom: 1, minZoom: 1, maxZoom: 18, centerX: 0.5, centerY: 0.5 };
 
-  function registerCanvas(key, element) {
-    if (!element) {
-      return;
+  // --- OpenStreetMap tile layer ---
+  const tileCache = new Map();
+
+  function getTileImage(z, x, y) {
+    const key = `${z}/${x}/${y}`;
+    if (tileCache.has(key)) return tileCache.get(key);
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    const entry = { img, loaded: false };
+    img.onload = () => { entry.loaded = true; drawAllScenes(); };
+    img.onerror = () => { entry.loaded = false; };
+    img.src = `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+    tileCache.set(key, entry);
+    // Cap cache at ~600 tiles (~150 MB) to limit memory usage
+    if (tileCache.size > 600) {
+      const iter = tileCache.keys();
+      for (let i = 0; i < 60; i++) {
+        const k = iter.next().value;
+        if (k) tileCache.delete(k);
+      }
     }
-    mapCanvases.set(key, { canvas: element, ctx: element.getContext('2d') });
+    return entry;
   }
 
+  function drawTiles(ctx, canvas, viewport) {
+    // Determine OSM zoom level from our continuous zoom
+    const osmZoom = Math.max(0, Math.min(18, Math.round(Math.log2(view.zoom) + 1)));
+    const numTiles = Math.pow(2, osmZoom);
+
+    // Visible range in tile coords
+    const tileLeft = Math.floor(viewport.left * numTiles);
+    const tileRight = Math.ceil((viewport.left + viewport.width) * numTiles);
+    const tileTop = Math.floor(viewport.top * numTiles);
+    const tileBottom = Math.ceil((viewport.top + viewport.height) * numTiles);
+
+    for (let tx = tileLeft; tx < tileRight; tx++) {
+      for (let ty = tileTop; ty < tileBottom; ty++) {
+        // Wrap horizontally, skip out-of-range vertically
+        const wrappedX = ((tx % numTiles) + numTiles) % numTiles;
+        if (ty < 0 || ty >= numTiles) continue;
+
+        const entry = getTileImage(osmZoom, wrappedX, ty);
+        // Tile bounds in [0,1] world space
+        const tileU = tx / numTiles;
+        const tileV = ty / numTiles;
+        const tileSizeU = 1 / numTiles;
+        const tileSizeV = 1 / numTiles;
+
+        const sx = ((tileU - viewport.left) / viewport.width) * canvas.width;
+        const sy = ((tileV - viewport.top) / viewport.height) * canvas.height;
+        const sw = (tileSizeU / viewport.width) * canvas.width;
+        const sh = (tileSizeV / viewport.height) * canvas.height;
+
+        if (entry.loaded) {
+          ctx.drawImage(entry.img, sx, sy, sw, sh);
+        } else {
+          ctx.fillStyle = '#1a1a2e';
+          ctx.fillRect(sx, sy, sw, sh);
+        }
+      }
+    }
+  }
+  let statusBeforeModal = '';
+  const dragState = { active: false, pointerId: null, lastX: 0, lastY: 0, moved: false, blockClick: false };
+  const touchState = { touches: [], initialDistance: 0, initialZoom: 1 };
+  const mapCanvases = new Map();
+
+  function registerCanvas(key, element) { if (!element) return; mapCanvases.set(key, { canvas: element, ctx: element.getContext('2d') }); }
   registerCanvas('main', mainCanvas);
   registerCanvas('modal', modalCanvas);
 
   function getViewWindow() {
-    const width = 1 / view.zoom;
-    const height = 1 / view.zoom;
-    const left = view.centerX - width / 2;
-    const top = view.centerY - height / 2;
-    return { left, top, width, height };
+    const width = 1 / view.zoom, height = 1 / view.zoom;
+    return { left: view.centerX - width/2, top: view.centerY - height/2, width, height };
   }
 
   function clampViewCenter() {
-    const width = 1 / view.zoom;
-    const height = 1 / view.zoom;
-    const halfW = width / 2;
-    const halfH = height / 2;
-    if (width >= 1) {
-      view.centerX = 0.5;
-    } else {
+    const halfW = 0.5 / view.zoom, halfH = 0.5 / view.zoom;
+    if (1/view.zoom >= 1) { view.centerX = 0.5; view.centerY = 0.5; }
+    else {
       view.centerX = Math.min(Math.max(view.centerX, halfW), 1 - halfW);
-    }
-    if (height >= 1) {
-      view.centerY = 0.5;
-    } else {
       view.centerY = Math.min(Math.max(view.centerY, halfH), 1 - halfH);
     }
   }
 
   function worldToCanvas(u, v, viewport, targetCanvas) {
-    const x = ((u - viewport.left) / viewport.width) * targetCanvas.width;
-    const y = ((v - viewport.top) / viewport.height) * targetCanvas.height;
-    return { x, y };
+    return { x: ((u - viewport.left) / viewport.width) * targetCanvas.width, y: ((v - viewport.top) / viewport.height) * targetCanvas.height };
   }
 
   function canvasToWorld(normX, normY, viewport) {
-    return {
-      u: viewport.left + normX * viewport.width,
-      v: viewport.top + normY * viewport.height
-    };
-  }
-
-  function resizeCanvasTarget(target) {
-    if (!target || !target.canvas) {
-      return;
-    }
-    const canvasEl = target.canvas;
-    const rect = canvasEl.getBoundingClientRect();
-    const parentRect = canvasEl.parentElement ? canvasEl.parentElement.getBoundingClientRect() : rect;
-    const width = Math.max(canvasEl.clientWidth || rect.width || parentRect.width || 0, 320);
-    const height = Math.max(canvasEl.clientHeight || rect.height || parentRect.height || 0, 320);
-    if (canvasEl.width !== width || canvasEl.height !== height) {
-      canvasEl.width = width;
-      canvasEl.height = height;
-    }
+    return { u: viewport.left + normX * viewport.width, v: viewport.top + normY * viewport.height };
   }
 
   function resizeAllCanvases() {
-    mapCanvases.forEach(resizeCanvasTarget);
+    mapCanvases.forEach(target => {
+      const rect = target.canvas.getBoundingClientRect();
+      target.canvas.width = rect.width; target.canvas.height = rect.height;
+    });
     drawAllScenes();
-  }
-
-  function drawBackground(viewport, target) {
-    const { ctx, canvas: canvasEl } = target;
-    const w = canvasEl.width;
-    const h = canvasEl.height;
-    const gradient = ctx.createLinearGradient(0, 0, w, h);
-    gradient.addColorStop(0, '#02142f');
-    gradient.addColorStop(1, '#030712');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, w, h);
-    ctx.strokeStyle = 'rgba(148,163,184,0.12)';
-    ctx.lineWidth = 1;
-    for (let lon = -120; lon <= 120; lon += 60) {
-      const worldX = (lon + 180) / 360;
-      if (worldX < viewport.left || worldX > viewport.left + viewport.width) {
-        continue;
-      }
-      const top = worldToCanvas(worldX, viewport.top, viewport, canvasEl);
-      const bottom = worldToCanvas(worldX, viewport.top + viewport.height, viewport, canvasEl);
-      ctx.beginPath();
-      ctx.moveTo(top.x, top.y);
-      ctx.lineTo(bottom.x, bottom.y);
-      ctx.stroke();
-    }
-    for (let lat = -60; lat <= 60; lat += 30) {
-      const worldY = (90 - lat) / 180;
-      if (worldY < viewport.top || worldY > viewport.top + viewport.height) {
-        continue;
-      }
-      const left = worldToCanvas(viewport.left, worldY, viewport, canvasEl);
-      const right = worldToCanvas(viewport.left + viewport.width, worldY, viewport, canvasEl);
-      ctx.beginPath();
-      ctx.moveTo(left.x, left.y);
-      ctx.lineTo(right.x, right.y);
-      ctx.stroke();
-    }
-  }
-
-  function drawContinents(viewport, target) {
-    const { ctx, canvas: canvasEl } = target;
-    ctx.fillStyle = 'rgba(255,255,255,0.04)';
-    ctx.strokeStyle = 'rgba(110,231,255,0.2)';
-    ctx.lineWidth = 1.2;
-    continentShapes.forEach(shape => {
-      ctx.beginPath();
-      shape.forEach(([lon, lat], idx) => {
-        const point = projectPoint(lon, lat);
-        const { x, y } = worldToCanvas(point.u, point.v, viewport, canvasEl);
-        if (idx === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
-      });
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-    });
-  }
-
-  function drawAirports(viewport, target) {
-    const { ctx, canvas: canvasEl } = target;
-    state.airports.forEach(airport => {
-      const { x, y } = worldToCanvas(airport.u, airport.v, viewport, canvasEl);
-      const isSelected =
-        (state.selection.from && state.selection.from.code === airport.code) ||
-        (state.selection.to && state.selection.to.code === airport.code);
-      const radius = isSelected ? 4 : 2;
-      ctx.beginPath();
-      ctx.fillStyle = isSelected ? '#fbbf24' : 'rgba(148,163,184,0.55)';
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fill();
-    });
-  }
-
-  function drawRoutes(viewport, target) {
-    const { ctx, canvas: canvasEl } = target;
-    if (!state.routes.length) {
-      return;
-    }
-    ctx.save();
-    ctx.lineWidth = 2;
-    state.routes.forEach((route, idx) => {
-      const stops = route.airports.map(a => state.airportMap.get(a.code)).filter(Boolean);
-      if (stops.length < 2) {
-        return;
-      }
-      ctx.beginPath();
-      ctx.strokeStyle = idx === 0 ? 'rgba(34,211,238,0.9)' : 'rgba(94,234,212,0.6)';
-      stops.forEach((airport, i) => {
-        const { x, y } = worldToCanvas(airport.u, airport.v, viewport, canvasEl);
-        if (i === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
-      });
-      ctx.stroke();
-    });
-    ctx.restore();
   }
 
   function drawSceneOnTarget(target) {
-    if (!target || !target.ctx || !target.canvas) {
-      return;
-    }
-    const { ctx, canvas: canvasEl } = target;
-    if (!canvasEl.width || !canvasEl.height) {
-      return;
-    }
-    ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+    const { ctx, canvas } = target; if (!canvas.width) return;
     const viewport = getViewWindow();
-    drawBackground(viewport, target);
-    drawContinents(viewport, target);
-    drawRoutes(viewport, target);
-    drawAirports(viewport, target);
+    ctx.fillStyle = '#02142f'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Draw OSM tile layer
+    drawTiles(ctx, canvas, viewport);
+    // Scale airport dot radius with zoom so dots remain visible at high zoom levels.
+    // Beyond a baseline zoom the radius grows logarithmically to stay perceptible
+    // against the increasingly detailed tile layer.
+    const baseZoom = 4;
+    const dotScale = view.zoom > baseZoom ? Math.max(1, 1 + Math.log2(view.zoom / baseZoom)) : 1;
+    state.airports.forEach(a => {
+      const c = worldToCanvas(a.u, a.v, viewport, canvas);
+      const sel = (state.selection.from?.code === a.code || state.selection.to?.code === a.code);
+      ctx.fillStyle = sel ? '#fbbf24' : 'rgba(148,163,184,0.55)';
+      const r = (sel ? 4 : 2) * dotScale;
+      ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI*2); ctx.fill();
+    });
+    state.routes.forEach((route, idx) => {
+      ctx.strokeStyle = idx === 0 ? '#22d3ee' : '#5eead4'; ctx.lineWidth = 2; ctx.beginPath();
+      route.airports.map(a => state.airportMap.get(a.code)).filter(Boolean).forEach((a, i) => {
+        const c = worldToCanvas(a.u, a.v, viewport, canvas);
+        if (i === 0) ctx.moveTo(c.x, c.y); else ctx.lineTo(c.x, c.y);
+      });
+      ctx.stroke();
+    });
   }
 
-  function drawAllScenes() {
-    mapCanvases.forEach(drawSceneOnTarget);
-  }
-
-  function updateSelectionLabels() {
-    selectionFrom.textContent = state.selection.from ? state.selection.from.code : '--';
-    selectionTo.textContent = state.selection.to ? state.selection.to.code : '--';
-  }
-
-  function setActiveField(field) {
-    state.activeField = field;
-    modeButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.field === field));
-    statusEl.textContent = '다음 클릭은 ' + (field === 'from' ? '출발' : '도착') + ' 공항을 설정합니다.';
-  }
+  function drawAllScenes() { mapCanvases.forEach(drawSceneOnTarget); }
 
   function setInputField(field, value) {
-    const target = field === 'from' ? fromInput : toInput;
-    const cleaned = (value || '').trim().toUpperCase();
-    target.value = cleaned;
-    const airport = state.airportMap.get(cleaned) || null;
-    state.selection[field] = airport;
-    updateSelectionLabels();
+    const val = (value || '').trim().toUpperCase();
+    if (field === 'from') fromInput.value = val; else toInput.value = val;
+    state.selection[field] = state.airportMap.get(val) || null;
+    selectionFrom.textContent = state.selection.from?.code || '--';
+    selectionTo.textContent = state.selection.to?.code || '--';
     drawAllScenes();
-    refreshBestSections();
   }
 
-  function nearestAirport(lat, lon) {
-    let best = null;
-    let bestScore = Infinity;
-    state.airports.forEach(airport => {
-      const dLat = airport.lat - lat;
-      const dLon = airport.lon - lon;
-      const score = dLat * dLat + dLon * dLon;
-      if (score < bestScore) {
-        best = airport;
-        bestScore = score;
+  async function fetchAirports() {
+    loader.textContent = '공항 데이터를 불러오는 중...';
+    try {
+      let data;
+      // Try SW-intercepted endpoint first; fall back to direct JSON file
+      // when the service worker is not yet controlling this page (first visit).
+      const swControlling = !!navigator.serviceWorker?.controller;
+      if (swControlling) {
+        const response = await fetch('./airports?limit=8192');
+        if (response.ok) {
+          const ct = response.headers.get('content-type') || '';
+          if (ct.includes('application/json')) {
+            data = await response.json();
+          }
+        }
       }
-    });
-    return best;
+      if (!data) {
+        const response = await fetch('./airports.json');
+        if (!response.ok) throw new Error('공항 데이터를 불러오지 못했습니다.');
+        const allAirports = await response.json();
+        data = { airports: allAirports.slice(0, 8192) };
+      }
+      const airports = Array.isArray(data.airports) ? data.airports : [];
+      state.airports = airports.map(a => ({ ...a, ...projectPoint(a.lon, a.lat) }));
+      state.airportMap = new Map(state.airports.map(a => [a.code, a]));
+      statAirports.textContent = state.airports.length.toLocaleString();
+      loader.style.display = 'none';
+      drawAllScenes();
+    } catch (err) {
+      loader.textContent = '데이터 로드 실패: ' + err.message;
+    }
   }
 
-  function handleCanvasClick(evt) {
-    if (dragState.blockClick) {
-      dragState.blockClick = false;
-      return;
-    }
-    const canvasEl = evt.currentTarget;
-    const rect = canvasEl.getBoundingClientRect();
-    const normX = (evt.clientX - rect.left) / rect.width;
-    const normY = (evt.clientY - rect.top) / rect.height;
-    const viewport = getViewWindow();
-    const world = canvasToWorld(normX, normY, viewport);
+  function searchRoutes() {
+    const from = fromInput.value.trim().toUpperCase(), to = toInput.value.trim().toUpperCase();
+    const maxT = parseInt(transfersInput.value) || 0;
+    if (from.length !== 3 || to.length !== 3) return;
+    if (!state.kernel) { statusEl.textContent = 'WASM 커널이 로드되지 않았습니다.'; return; }
+    statusEl.textContent = 'WASM 분석 중...';
+    try {
+      const data = JSON.parse(state.kernel.searchRoutes(from, to, maxT));
+      state.routes = data.paths || [];
+      resultsEl.innerHTML = state.routes.map((p, i) => `
+        <div class="result-card">
+          <h3>경로 ${i+1}: ${p.airports.map(a => a.code).join(' → ')}</h3>
+          <p>${p.legs}구간 · ${p.totalDistanceKm.toFixed(1)}km · 효율 ${p.efficiency.toFixed(3)}</p>
+        </div>
+      `).join('') || '<div class="empty-state">경로 없음</div>';
+      statusEl.textContent = `분석 완료: ${state.routes.length}개 발견`;
+      drawAllScenes();
+    } catch (err) { statusEl.textContent = '오류: ' + err.message; }
+  }
+
+  function handleCanvasClick(canvas, e) {
+    if (dragState.blockClick) return;
+    const rect = canvas.getBoundingClientRect();
+    const world = canvasToWorld((e.clientX - rect.left)/rect.width, (e.clientY - rect.top)/rect.height, getViewWindow());
     const lon = world.u * 360 - 180;
-    const lat = 90 - world.v * 180;
-    const match = nearestAirport(lat, lon);
-    if (match) {
-      setInputField(state.activeField, match.code);
-    }
+    const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * world.v)));
+    const lat = latRad * 180 / Math.PI;
+    let best = null, minDist = Infinity;
+    state.airports.forEach(a => {
+      const d = Math.pow(a.lat-lat, 2) + Math.pow(a.lon-lon, 2);
+      if (d < minDist) { minDist = d; best = a; }
+    });
+    if (best) setInputField(state.activeField, best.code);
   }
 
-  function handleCanvasWheel(evt) {
-    evt.preventDefault();
-    const canvasEl = evt.currentTarget;
-    const delta = evt.deltaY;
-    const factor = delta < 0 ? 1.15 : 0.85;
-    const newZoom = Math.max(view.minZoom, Math.min(view.maxZoom, view.zoom * factor));
-    if (newZoom === view.zoom) {
-      return;
-    }
-    const rect = canvasEl.getBoundingClientRect();
-    const normX = (evt.clientX - rect.left) / rect.width;
-    const normY = (evt.clientY - rect.top) / rect.height;
-    const viewport = getViewWindow();
-    const focus = canvasToWorld(normX, normY, viewport);
-    const newWidth = 1 / newZoom;
-    const newHeight = 1 / newZoom;
-    let newLeft = focus.u - normX * newWidth;
-    let newTop = focus.v - normY * newHeight;
-    const maxLeft = Math.max(0, 1 - newWidth);
-    const maxTop = Math.max(0, 1 - newHeight);
-    newLeft = Math.min(Math.max(newLeft, 0), maxLeft);
-    newTop = Math.min(Math.max(newTop, 0), maxTop);
-    view.centerX = newLeft + newWidth / 2;
-    view.centerY = newTop + newHeight / 2;
-    view.zoom = newZoom;
+  function handlePointerDown(canvas, e) {
+    if (e.button !== 0) return;
+    dragState.active = true; dragState.pointerId = e.pointerId;
+    dragState.lastX = e.clientX; dragState.lastY = e.clientY;
+    dragState.moved = false; dragState.blockClick = false;
+    canvas.setPointerCapture(e.pointerId);
+    canvas.classList.add('dragging');
+  }
+
+  function handlePointerMove(canvas, e) {
+    if (!dragState.active || e.pointerId !== dragState.pointerId) return;
+    const dx = e.clientX - dragState.lastX, dy = e.clientY - dragState.lastY;
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) dragState.moved = true;
+    const rect = canvas.getBoundingClientRect();
+    view.centerX -= dx / rect.width / view.zoom;
+    view.centerY -= dy / rect.height / view.zoom;
+    clampViewCenter();
+    dragState.lastX = e.clientX; dragState.lastY = e.clientY;
+    drawAllScenes();
+  }
+
+  function handlePointerUp(canvas, e) {
+    if (e.pointerId !== dragState.pointerId) return;
+    canvas.classList.remove('dragging');
+    dragState.blockClick = dragState.moved;
+    dragState.active = false; dragState.pointerId = null;
+  }
+
+  function handleWheel(e) {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    view.zoom = Math.min(view.maxZoom, Math.max(view.minZoom, view.zoom * factor));
     clampViewCenter();
     drawAllScenes();
   }
 
-  function handlePointerDown(evt) {
-    evt.preventDefault();
-    const canvasEl = evt.currentTarget;
-    dragState.active = true;
-    dragState.pointerId = evt.pointerId;
-    dragState.lastX = evt.clientX;
-    dragState.lastY = evt.clientY;
-    dragState.moved = false;
-    dragState.blockClick = false;
-    if (canvasEl.setPointerCapture) {
-      canvasEl.setPointerCapture(evt.pointerId);
-    }
-    canvasEl.classList.add('dragging');
+  // Touch gesture handlers for mobile pinch-to-zoom
+  function getTouchDistance(touch1, touch2) {
+    const dx = touch2.clientX - touch1.clientX;
+    const dy = touch2.clientY - touch1.clientY;
+    return Math.sqrt(dx * dx + dy * dy);
   }
 
-  function handlePointerMove(evt) {
-    if (!dragState.active || dragState.pointerId !== evt.pointerId) {
-      return;
+  function handleTouchStart(canvas, e) {
+    if (!state.isMobile) return;
+    touchState.touches = Array.from(e.touches);
+    if (touchState.touches.length === 2) {
+      e.preventDefault();
+      touchState.initialDistance = getTouchDistance(touchState.touches[0], touchState.touches[1]);
+      touchState.initialZoom = view.zoom;
     }
-    const canvasEl = evt.currentTarget;
-    const dx = evt.clientX - dragState.lastX;
-    const dy = evt.clientY - dragState.lastY;
-    if (dx === 0 && dy === 0) {
-      return;
-    }
-    const viewport = getViewWindow();
-    const worldDx = (dx / canvasEl.width) * viewport.width;
-    const worldDy = (dy / canvasEl.height) * viewport.height;
-    view.centerX -= worldDx;
-    view.centerY -= worldDy;
-    clampViewCenter();
-    dragState.lastX = evt.clientX;
-    dragState.lastY = evt.clientY;
-    dragState.moved = true;
-    dragState.blockClick = true;
-    drawAllScenes();
   }
 
-  function handlePointerUp(evt) {
-    if (!dragState.active || dragState.pointerId !== evt.pointerId) {
-      return;
+  function handleTouchMove(canvas, e) {
+    if (!state.isMobile) return;
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      const currentDistance = getTouchDistance(e.touches[0], e.touches[1]);
+      const scale = currentDistance / touchState.initialDistance;
+      view.zoom = Math.min(view.maxZoom, Math.max(view.minZoom, touchState.initialZoom * scale));
+      clampViewCenter();
+      drawAllScenes();
     }
-    dragState.active = false;
-    const canvasEl = evt.currentTarget;
-    canvasEl.classList.remove('dragging');
-    if (canvasEl.releasePointerCapture) {
-      if (!canvasEl.hasPointerCapture || canvasEl.hasPointerCapture(evt.pointerId)) {
-        canvasEl.releasePointerCapture(evt.pointerId);
-      }
-    }
-    if (!dragState.moved) {
-      dragState.blockClick = false;
-    }
-    dragState.pointerId = null;
-    dragState.moved = false;
   }
 
-  function openLargeMode(evt) {
-    if (evt) {
-      evt.preventDefault();
+  function handleTouchEnd(canvas, e) {
+    if (!state.isMobile) return;
+    touchState.touches = Array.from(e.touches);
+    if (touchState.touches.length < 2) {
+      touchState.initialDistance = 0;
+      touchState.initialZoom = view.zoom;
     }
-    if (!mapModal || mapModal.classList.contains('open')) {
-      return;
-    }
-    mapModal.classList.add('open');
-    mapModal.setAttribute('aria-hidden', 'false');
+  }
+
+  function openMapModal() {
     statusBeforeModal = statusEl.textContent;
-    statusEl.textContent = modalHintMessage;
-    requestAnimationFrame(() => {
-      const modalTarget = mapCanvases.get('modal');
-      if (modalTarget) {
-        resizeCanvasTarget(modalTarget);
-      }
-      drawAllScenes();
-    });
+    mapModal.classList.add('open'); mapModal.setAttribute('aria-hidden', 'false');
+    resizeAllCanvases();
   }
 
-  function closeLargeMode() {
-    if (!mapModal || !mapModal.classList.contains('open')) {
-      return;
-    }
-    mapModal.classList.remove('open');
-    mapModal.setAttribute('aria-hidden', 'true');
-    if (statusEl.textContent === modalHintMessage) {
-      statusEl.textContent = statusBeforeModal || '지도를 클릭하거나 공항 코드를 입력하세요.';
-    }
-    statusBeforeModal = '';
-    dragState.blockClick = false;
+  function closeMapModal() {
+    mapModal.classList.remove('open'); mapModal.setAttribute('aria-hidden', 'true');
+    statusEl.textContent = statusBeforeModal;
   }
 
-  function attachCanvasEvents(canvasEl) {
-    if (!canvasEl) {
-      return;
+  [mainCanvas, modalCanvas].forEach(canvas => {
+    canvas.addEventListener('click', (e) => handleCanvasClick(canvas, e));
+    canvas.addEventListener('pointerdown', (e) => handlePointerDown(canvas, e));
+    canvas.addEventListener('pointermove', (e) => handlePointerMove(canvas, e));
+    canvas.addEventListener('pointerup', (e) => handlePointerUp(canvas, e));
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); openMapModal(); });
+  });
+
+  function setupTouchGestures() {
+    if (state.isMobile) {
+      [mainCanvas, modalCanvas].forEach(canvas => {
+        canvas.addEventListener('touchstart', (e) => handleTouchStart(canvas, e), { passive: false });
+        canvas.addEventListener('touchmove', (e) => handleTouchMove(canvas, e), { passive: false });
+        canvas.addEventListener('touchend', (e) => handleTouchEnd(canvas, e), { passive: false });
+      });
     }
-    canvasEl.addEventListener('click', handleCanvasClick);
-    canvasEl.addEventListener('wheel', handleCanvasWheel, { passive: false });
-    canvasEl.addEventListener('pointerdown', handlePointerDown);
-    canvasEl.addEventListener('pointermove', handlePointerMove);
-    canvasEl.addEventListener('pointerup', handlePointerUp);
-    canvasEl.addEventListener('pointercancel', handlePointerUp);
-    canvasEl.addEventListener('pointerleave', handlePointerUp);
   }
 
-  function renderResults(data) {
-    resultsEl.innerHTML = '';
-    if (!data || !data.paths || !data.paths.length) {
-      const empty = document.createElement('div');
-      empty.className = 'empty-state';
-      empty.textContent = '조건에 맞는 경로가 없습니다. 공항을 다시 선택하세요.';
-      resultsEl.appendChild(empty);
-      state.routes = [];
-      drawAllScenes();
-      return;
-    }
-    state.routes = data.paths;
-    data.paths.forEach((path, idx) => {
-      const card = document.createElement('article');
-      card.className = 'result-card';
-      const title = document.createElement('h3');
-      title.textContent = '경로 ' + (idx + 1) + ': ' + path.airports.map(a => a.code).join(' → ');
-      card.appendChild(title);
-      const details = document.createElement('p');
-      details.textContent = path.legs + ' 구간 · ' + path.hops + ' 연결 · ' + path.totalDistanceKm.toFixed(1) + ' km';
-      card.appendChild(details);
-      const tags = document.createElement('div');
-      tags.className = 'route-tags';
-      const eff = document.createElement('span');
-      eff.className = 'tag accent';
-      eff.textContent = '효율 ' + path.efficiency.toFixed(3);
-      tags.appendChild(eff);
-      const gc = document.createElement('span');
-      gc.className = 'tag';
-      gc.textContent = '대권거리 ' + path.greatCircleKm.toFixed(1) + ' km';
-      tags.appendChild(gc);
-      card.appendChild(tags);
-      resultsEl.appendChild(card);
-    });
-    drawAllScenes();
-  }
+  modalCloseBtn.addEventListener('click', closeMapModal);
+  mapModal.addEventListener('click', (e) => { if (e.target === mapModal) closeMapModal(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && mapModal.classList.contains('open')) closeMapModal(); });
 
-  function getContinent(lat, lon) {
-    if (lat >= 7 && lat <= 84 && lon >= -170 && lon <= -50) return '북미';
-    if (lat < 7 && lat >= -60 && lon >= -100 && lon <= -30) return '남미';
-    if (lat < -15 && lon >= 100 && lon <= 180) return '오세아니아';
-    if (lat >= 12 && lat <= 42 && lon >= 25 && lon <= 63) return '중동';
-    if (lat >= 35 && lon >= -15 && lon <= 60) return '유럽';
-    if (lat < 35 && lat >= -40 && lon >= -20 && lon <= 55) return '아프리카';
-    if (lat >= -15 && lon > 55 && lon <= 180) return '아시아';
-    if (lat >= 5 && lon >= 25 && lon <= 180) return '아시아';
-    return '기타';
-  }
-
-  function computeBestDestinations(originCode, continentFilter) {
-    if (!state.kernel || state.airports.length === 0) return {};
-    const origin = state.airportMap.get(originCode);
-    if (!origin) return {};
-    let targetContinent = continentFilter || getContinent(origin.lat, origin.lon);
-    const originCountry = origin.country || '';
-    const candidates = state.airports.filter(a => {
-      if (a.code === originCode) return false;
-      if (originCountry && a.country && a.country === originCountry) return false;
-      return getContinent(a.lat, a.lon) === targetContinent;
-    });
-    const sample = candidates.length > 200
-      ? candidates.filter((_, i) => i % Math.ceil(candidates.length / 200) === 0)
-      : candidates;
-    const seenCountries = new Set();
-    const continentResults = {};
-    const MAX_COUNTRIES = 5;
-    for (const dest of sample) {
-      if (seenCountries.size >= MAX_COUNTRIES) break;
-      const destCountry = dest.country || '';
-      if (originCountry && destCountry && destCountry === originCountry) continue;
-      if (destCountry && seenCountries.has(destCountry)) continue;
-      try {
-        const result = JSON.parse(state.kernel.searchRoutes(originCode, dest.code, 2));
-        if (!result.paths || !result.paths.length) continue;
-        const path = result.paths[0];
-        const continent = getContinent(dest.lat, dest.lon);
-        if (!continentResults[continent]) continentResults[continent] = [];
-        continentResults[continent].push({
-          code: dest.code,
-          lat: dest.lat,
-          lon: dest.lon,
-          country: destCountry,
-          distanceKm: path.totalDistanceKm,
-          efficiency: path.efficiency,
-          hops: path.hops || path.legs || 0,
-          route: path.airports ? path.airports.map(a => a.code).join(' → ') : originCode + ' → ' + dest.code
-        });
-        if (destCountry) seenCountries.add(destCountry);
-      } catch { /* skip */ }
-    }
-    for (const continent of Object.keys(continentResults)) {
-      continentResults[continent].sort((a, b) => b.efficiency - a.efficiency);
-      const unique = [];
-      const countrySeen = new Set();
-      for (const item of continentResults[continent]) {
-        const c = item.country || item.code;
-        if (countrySeen.has(c)) continue;
-        countrySeen.add(c);
-        unique.push(item);
-        if (unique.length >= 5) break;
-      }
-      continentResults[continent] = unique;
-    }
-    return continentResults;
-  }
+  swapBtn.addEventListener('click', () => { const f = fromInput.value, t = toInput.value; setInputField('from', t); setInputField('to', f); });
+  modeButtons.forEach(b => b.addEventListener('click', () => { modeButtons.forEach(x => x.classList.remove('active')); b.classList.add('active'); state.activeField = b.dataset.field; }));
+  searchBtn.addEventListener('click', searchRoutes);
+  window.addEventListener('resize', resizeAllCanvases);
 
   function renderBestDestinations(container, data) {
     container.innerHTML = '';
@@ -686,205 +516,287 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  async function refreshBestSections() {
+  function getContinent(lat, lon) {
+    if (lat >= 7 && lat <= 84 && lon >= -170 && lon <= -50) return '북미';
+    if (lat < 7 && lat >= -60 && lon >= -100 && lon <= -30) return '남미';
+    if (lat < -15 && lon >= 100 && lon <= 180) return '오세아니아';
+    if (lat >= 12 && lat <= 42 && lon >= 25 && lon <= 63) return '중동';
+    if (lat >= 35 && lon >= -15 && lon <= 60) return '유럽';
+    if (lat < 35 && lat >= -40 && lon >= -20 && lon <= 55) return '아프리카';
+    if (lat >= -15 && lon > 55 && lon <= 180) return '아시아';
+    if (lat >= 5 && lon >= 25 && lon <= 180) return '아시아';
+    return '기타';
+  }
+
+  function haversineKm(lat1, lon1, lat2, lon2) {
+    const R = 6371.0;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  // Hardcoded route restrictions (mirrors server-side logistics_restrictions)
+  const ROUTE_RESTRICTIONS = [
+    { origin: 'ICN', destination: 'FNJ' },
+    { origin: 'FNJ', destination: 'ICN' },
+    { origin: 'SVO', destination: 'KBP' },
+    { origin: 'KBP', destination: 'SVO' }
+  ];
+
+  function getForbiddenCountries(originCode) {
+    const countries = new Set();
+    for (const rule of ROUTE_RESTRICTIONS) {
+      if (rule.origin !== originCode) continue;
+      const dest = state.airportMap.get(rule.destination);
+      if (dest && dest.country) countries.add(dest.country);
+    }
+    return countries;
+  }
+
+  function computeBestDestinationsFallback(originCode, continentFilter) {
+    if (!state.kernel || state.airports.length === 0) return {};
+    const origin = state.airportMap.get(originCode);
+    if (!origin) return {};
+    const filterContinent = continentFilter || getContinent(origin.lat, origin.lon);
+    const originCountry = origin.country || '';
+    const forbiddenCountries = getForbiddenCountries(originCode);
+
+    // --- Tier 1: Spatial filtering (500km / 1000km bounding box) ---
+    const tier1Near = [];
+    const tier1Far = [];
+    for (const a of state.airports) {
+      if (a.code === originCode) continue;
+      if (getContinent(a.lat, a.lon) !== filterContinent) continue;
+      // Skip domestic (same-country) destinations
+      if (originCountry && a.country && a.country === originCountry) continue;
+      // Skip destinations in forbidden countries
+      if (a.country && forbiddenCountries.has(a.country)) continue;
+      const dist = haversineKm(origin.lat, origin.lon, a.lat, a.lon);
+      if (dist <= 500) tier1Near.push(a);
+      else if (dist <= 1000) tier1Far.push(a);
+    }
+
+    // --- Tier 2: Hub-to-hub direct flights ---
+    const tier2Hubs = [];
+    if (state.kernel.getDirectDests) {
+      try {
+        const directData = JSON.parse(state.kernel.getDirectDests(originCode));
+        const directDests = directData.destinations || [];
+        const HUB_MIN_CONNECTIONS = 30;
+        for (const d of directDests) {
+          if (getContinent(d.lat, d.lon) !== filterContinent) continue;
+          // Skip domestic (same-country) destinations
+          const existing = state.airportMap.get(d.code);
+          const destCountry = d.country || existing?.country || '';
+          if (originCountry && destCountry && destCountry === originCountry) continue;
+          // Skip destinations in forbidden countries
+          if (destCountry && forbiddenCountries.has(destCountry)) continue;
+          if (d.connections >= HUB_MIN_CONNECTIONS) {
+            if (existing) tier2Hubs.push(existing);
+          }
+        }
+      } catch { /* skip */ }
+    }
+
+    // --- Merge and deduplicate ---
+    const seen = new Set();
+    const candidates = [];
+    for (const list of [tier1Near, tier2Hubs, tier1Far]) {
+      for (const a of list) {
+        if (!seen.has(a.code)) {
+          seen.add(a.code);
+          candidates.push(a);
+        }
+      }
+    }
+
+    if (candidates.length < 20) {
+      const remaining = state.airports.filter(a => {
+        if (a.code === originCode || seen.has(a.code)) return false;
+        // Skip domestic (same-country) destinations
+        if (originCountry && a.country && a.country === originCountry) return false;
+        // Skip destinations in forbidden countries
+        if (a.country && forbiddenCountries.has(a.country)) return false;
+        return getContinent(a.lat, a.lon) === filterContinent;
+      });
+      for (const a of remaining) {
+        if (!seen.has(a.code)) {
+          seen.add(a.code);
+          candidates.push(a);
+        }
+        if (candidates.length >= 200) break;
+      }
+    }
+
+    const sample = candidates.length > 200 ? candidates.slice(0, 200) : candidates;
+
+    // --- Search and score with country-unique top 5 ---
+    const seenCountries = new Set();
+    const continentResults = {};
+    const MAX_COUNTRIES = 5;
+
+    for (const dest of sample) {
+      if (seenCountries.size >= MAX_COUNTRIES) break;
+
+      const destCountry = dest.country || '';
+
+      // Skip domestic (same-country) destinations
+      if (originCountry && destCountry && destCountry === originCountry) continue;
+
+      if (destCountry && seenCountries.has(destCountry)) continue;
+
+      try {
+        const result = JSON.parse(state.kernel.searchRoutes(originCode, dest.code, 2));
+        if (!result.paths || !result.paths.length) continue;
+        const path = result.paths[0];
+        const dist = path.totalDistanceKm;
+        const efficiency = path.efficiency;
+        const reliability = efficiency * 100;
+        const score = (reliability / (dist + 1)) * 1000;
+
+        const continent = getContinent(dest.lat, dest.lon);
+        if (!continentResults[continent]) continentResults[continent] = [];
+        continentResults[continent].push({
+          code: dest.code,
+          lat: dest.lat,
+          lon: dest.lon,
+          country: destCountry,
+          distanceKm: dist,
+          efficiency: efficiency,
+          score: score,
+          hops: path.hops || path.legs || 0,
+          route: path.airports ? path.airports.map(a => a.code).join(' → ') : originCode + ' → ' + dest.code
+        });
+
+        if (destCountry) seenCountries.add(destCountry);
+      } catch { /* skip */ }
+    }
+
+    for (const continent of Object.keys(continentResults)) {
+      continentResults[continent].sort((a, b) => b.score - a.score);
+      const unique = [];
+      const countrySeen = new Set();
+      for (const item of continentResults[continent]) {
+        const c = item.country || item.code;
+        if (countrySeen.has(c)) continue;
+        countrySeen.add(c);
+        unique.push(item);
+        if (unique.length >= 5) break;
+      }
+      continentResults[continent] = unique;
+    }
+    return continentResults;
+  }
+
+  function requestBestFrom() {
     const fromCode = fromInput.value.trim().toUpperCase();
-    const toCode = toInput.value.trim().toUpperCase();
-    if (fromCode.length === 3 && state.airportMap.has(fromCode)) {
-      bestFromSection.style.display = '';
-      const fromContinent = bestFromContinentSelect ? bestFromContinentSelect.value : '';
-      const fromOrigin = state.airportMap.get(fromCode);
-      const fromLabel = fromContinent || (fromOrigin ? getContinent(fromOrigin.lat, fromOrigin.lon) : '');
-      bestFromTitle.textContent = fromCode + '에서 최적 목적지' + (fromLabel ? ' (' + fromLabel + ')' : '');
-      bestFromResults.classList.add('loading');
-      await new Promise(r => setTimeout(r, 30));
-      const fromData = computeBestDestinations(fromCode, fromContinent);
-      renderBestDestinations(bestFromResults, fromData);
-      bestFromResults.classList.remove('loading');
-    } else {
-      bestFromSection.style.display = 'none';
-    }
-    if (toCode.length === 3 && state.airportMap.has(toCode)) {
-      bestToSection.style.display = '';
-      const toContinent = bestToContinentSelect ? bestToContinentSelect.value : '';
-      const toOrigin = state.airportMap.get(toCode);
-      const toLabel = toContinent || (toOrigin ? getContinent(toOrigin.lat, toOrigin.lon) : '');
-      bestToTitle.textContent = toCode + '에서 최적 목적지' + (toLabel ? ' (' + toLabel + ')' : '');
-      bestToResults.classList.add('loading');
-      await new Promise(r => setTimeout(r, 30));
-      const toData = computeBestDestinations(toCode, toContinent);
-      renderBestDestinations(bestToResults, toData);
-      bestToResults.classList.remove('loading');
-    } else {
-      bestToSection.style.display = 'none';
-    }
-  }
-
-  async function fetchAirports() {
-    const batchSize = 1024;
-    const combined = [];
-    let offset = 0;
-    let total = null;
-    loader.classList.remove('error');
-    loader.style.display = 'flex';
-    loader.textContent = '공항 데이터를 불러오는 중...';
-    try {
-      while (true) {
-        const params = new URLSearchParams({
-          limit: String(batchSize),
-          offset: String(offset)
-        });
-        const res = await fetch('./airports?' + params.toString());
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || '공항 데이터를 불러오지 못했습니다.');
-        }
-        if (total === null && typeof data.total === 'number') {
-          total = data.total;
-        }
-        const chunk = Array.isArray(data.airports) ? data.airports : [];
-        chunk.forEach(a => {
-          const point = projectPoint(a.lon, a.lat);
-          combined.push({ id: a.id, code: a.code, lat: a.lat, lon: a.lon, u: point.u, v: point.v });
-        });
-        offset += chunk.length;
-        if (total) {
-          const loaded = Math.min(offset, total);
-          loader.textContent = '공항 데이터를 불러오는 중... (' + loaded.toLocaleString() + ')';
-        }
-        if (!chunk.length || chunk.length < batchSize || (total && offset >= total)) {
-          break;
-        }
-      }
-      if (!combined.length) {
-        loader.classList.add('error');
-        loader.textContent = '공항 데이터가 비어 있습니다.';
-        statusEl.textContent = '공항 데이터가 비어 있습니다. 데이터를 다시 적재해 주세요.';
-        return;
-      }
-      state.airports = combined;
-      state.airportMap = new Map();
-      state.airports.forEach(a => state.airportMap.set(a.code, a));
-      const totalCount = total || state.airports.length;
-      statAirports.textContent = totalCount.toLocaleString();
-      loader.style.display = 'none';
-      drawAllScenes();
-      if (fromInput.value.trim()) {
-        setInputField('from', fromInput.value);
-      }
-      if (toInput.value.trim()) {
-        setInputField('to', toInput.value);
-      }
-    } catch (err) {
-      loader.classList.add('error');
-      loader.textContent = '공항 데이터를 불러오지 못했습니다.';
-      statusEl.textContent = err && err.message
-        ? err.message
-        : '공항 데이터를 불러오지 못했습니다. 새로고침 해주세요.';
-    }
-  }
-
-  function fetchHealth() {
-    fetch('./health')
-      .then(res => res.json())
-      .then(data => {
-        statRoutes.textContent = (data.routes_loaded || 0).toLocaleString();
-        statWorkers.textContent = String(data.worker_threads || 0);
-      })
-      .catch(() => {});
-  }
-
-  function searchRoutes() {
-    const from = fromInput.value.trim().toUpperCase();
-    const to = toInput.value.trim().toUpperCase();
-    if (from.length !== 3 || to.length !== 3) {
-      statusEl.textContent = '3자리 IATA 코드를 모두 입력해 주세요.';
+    if (fromCode.length !== 3 || !state.airportMap.has(fromCode)) {
+      bestFromResults.innerHTML = '<div class="empty-state">유효한 3자리 IATA 코드를 입력하세요.</div>';
       return;
     }
-    const params = new URLSearchParams({
-      from,
-      to,
-      maxTransfers: transfersInput.value || '3',
-      maxResults: resultsInput.value || '8'
-    });
-    statusEl.textContent = '가능한 경로를 계산하는 중입니다...';
-    fetch('./routes?' + params.toString())
-      .then(async res => {
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || '검색이 차단되었습니다.');
-        }
-        return data;
-      })
-      .then(data => {
-        statRoutes.textContent = String(data.results || 0);
-        renderResults(data);
-        statusEl.textContent = String(data.results || 0) + '개의 후보가 계산되었습니다.';
-      })
-      .catch(err => {
-        statusEl.textContent = err.message || '검색 중 문제가 발생했습니다.';
-      });
-  }
-
-  function fetchBest() {
-    refreshBestSections();
-  }
-
-  swapBtn.addEventListener('click', () => {
-    const from = fromInput.value.trim().toUpperCase();
-    const to = toInput.value.trim().toUpperCase();
-    setInputField('from', to);
-    setInputField('to', from);
-  });
-
-  modeButtons.forEach(btn => btn.addEventListener('click', () => setActiveField(btn.dataset.field)));
-  fromInput.addEventListener('focus', () => setActiveField('from'));
-  toInput.addEventListener('focus', () => setActiveField('to'));
-  fromInput.addEventListener('change', () => setInputField('from', fromInput.value));
-  toInput.addEventListener('change', () => setInputField('to', toInput.value));
-  attachCanvasEvents(mainCanvas);
-  attachCanvasEvents(modalCanvas);
-  if (mainCanvas) {
-    mainCanvas.addEventListener('contextmenu', openLargeMode);
-  }
-  if (modalCanvas) {
-    modalCanvas.addEventListener('contextmenu', evt => evt.preventDefault());
-  }
-  if (modalCloseBtn) {
-    modalCloseBtn.addEventListener('click', closeLargeMode);
-  }
-  if (mapModal) {
-    mapModal.addEventListener('click', evt => {
-      if (evt.target === mapModal) {
-        closeLargeMode();
-      }
-    });
-  }
-  document.addEventListener('keydown', evt => {
-    if (evt.key === 'Escape') {
-      closeLargeMode();
+    const continent = bestFromContinentSelect ? bestFromContinentSelect.value : '';
+    const origin = state.airportMap.get(fromCode);
+    const label = continent || (origin ? getContinent(origin.lat, origin.lon) : '');
+    bestFromTitle.textContent = fromCode + '에서 최적 목적지' + (label ? ' (' + label + ')' : '');
+    bestFromResults.classList.add('loading');
+    bestFromResults.innerHTML = '<div class="empty-state">계산 중...</div>';
+    if (state.bestWorker) {
+      const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon, country: a.country || '' }));
+      state.bestRequestId++;
+      state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: fromCode, airports, continent });
+    } else if (state.kernel) {
+      const data = computeBestDestinationsFallback(fromCode, continent);
+      renderBestDestinations(bestFromResults, data);
+      bestFromResults.classList.remove('loading');
+    } else {
+      bestFromResults.innerHTML = '<div class="empty-state">WASM 커널이 아직 로드되지 않았습니다. 잠시 후 다시 시도하세요.</div>';
+      bestFromResults.classList.remove('loading');
     }
-  });
-  searchBtn.addEventListener('click', searchRoutes);
-  window.addEventListener('resize', resizeAllCanvases);
-  if (bestRefreshBtn) bestRefreshBtn.addEventListener('click', refreshBestSections);
-  if (bestFromRefreshBtn) bestFromRefreshBtn.addEventListener('click', refreshBestSections);
-  if (bestToRefreshBtn) bestToRefreshBtn.addEventListener('click', refreshBestSections);
+  }
+
+  function requestBestTo() {
+    const toCode = toInput.value.trim().toUpperCase();
+    if (toCode.length !== 3 || !state.airportMap.has(toCode)) {
+      bestToResults.innerHTML = '<div class="empty-state">유효한 3자리 IATA 코드를 입력하세요.</div>';
+      return;
+    }
+    const continent = bestToContinentSelect ? bestToContinentSelect.value : '';
+    const origin = state.airportMap.get(toCode);
+    const label = continent || (origin ? getContinent(origin.lat, origin.lon) : '');
+    bestToTitle.textContent = toCode + '에서 최적 목적지' + (label ? ' (' + label + ')' : '');
+    bestToResults.classList.add('loading');
+    bestToResults.innerHTML = '<div class="empty-state">계산 중...</div>';
+    if (state.bestWorker) {
+      const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon, country: a.country || '' }));
+      state.bestRequestId++;
+      state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: toCode, airports, continent });
+    } else if (state.kernel) {
+      const data = computeBestDestinationsFallback(toCode, continent);
+      renderBestDestinations(bestToResults, data);
+      bestToResults.classList.remove('loading');
+    } else {
+      bestToResults.innerHTML = '<div class="empty-state">WASM 커널이 아직 로드되지 않았습니다. 잠시 후 다시 시도하세요.</div>';
+      bestToResults.classList.remove('loading');
+    }
+  }
 
   async function init() {
-    await initWasm();
-    await initServiceWorker();
+    // Detect mobile device
+    state.isMobile = detectMobile();
+    console.log('Device type:', state.isMobile ? 'Mobile' : 'Desktop');
     
-    // If Service Worker didn't claim the page yet, or we are on a platform without SW,
-    // we still try to fetch. But initServiceWorker waits for 'ready'.
-    fetchAirports();
-    fetchHealth();
-    fetchBest();
+    // Setup touch gestures for mobile devices
+    setupTouchGestures();
+    
+    await initServiceWorker();
+    await initWasm();
+    await fetchAirports();
+
+    // Start the best-destinations Web Worker (separate WASM instance)
+    try {
+      state.bestWorker = new Worker('./best-worker.js', { type: 'module' });
+      state.bestWorker.onmessage = (e) => {
+        const msg = e.data;
+        if (msg.type === 'init') {
+          if (msg.ok) console.log('Best-destinations worker ready');
+          else console.warn('Best-destinations worker init failed:', msg.error);
+          return;
+        }
+        if (msg.type === 'result') {
+          const fromCode = fromInput.value.trim().toUpperCase();
+          const toCode = toInput.value.trim().toUpperCase();
+          if (msg.originCode === fromCode) {
+            renderBestDestinations(bestFromResults, msg.data);
+            bestFromResults.classList.remove('loading');
+          }
+          if (msg.originCode === toCode) {
+            renderBestDestinations(bestToResults, msg.data);
+            bestToResults.classList.remove('loading');
+          }
+          return;
+        }
+        if (msg.type === 'error') {
+          console.warn('Best-destinations worker error:', msg.error);
+        }
+      };
+      state.bestWorker.postMessage({ type: 'init' });
+    } catch (err) {
+      console.warn('Web Worker not available:', err);
+    }
+
+    if (state.kernel) {
+      const h = JSON.parse(state.kernel.getHealth());
+      statRoutes.textContent = h.routes_loaded.toLocaleString();
+      statWorkers.textContent = 'WASM-Serverless';
+    }
   }
 
+  bestFromRefreshBtn.addEventListener('click', requestBestFrom);
+  bestToRefreshBtn.addEventListener('click', requestBestTo);
+
   resizeAllCanvases();
-  setActiveField('from');
-  statusEl.textContent = '지도를 클릭하거나 공항 코드를 입력하세요.';
-  renderResults(null);
-  
   init();
 });
