@@ -230,6 +230,9 @@ button.ghost:hover {
     display: block;
     cursor: grab;
     border-radius: 0;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
 }
 
 .map-canvas.dragging {
@@ -497,6 +500,12 @@ button.ghost:hover {
     }
 
     #map-wrapper {
-        min-height: 260px;
+        min-height: 450px;
+    }
+
+    .map-modal-content {
+        width: 95vw;
+        height: 90vh;
+        padding: 1.5rem;
     }
 }
