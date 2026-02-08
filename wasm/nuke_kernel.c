@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 
 #ifdef __EMSCRIPTEN__
@@ -23,6 +24,58 @@
 // The global store for WASM
 static nuke_flight_store_t g_store;
 static bool g_initialized = false;
+
+// Hardcoded route restrictions (mirrors logistics_restrictions in meta.db)
+typedef struct {
+    const char *origin;
+    const char *destination;
+} wasm_block_rule_t;
+
+static const wasm_block_rule_t g_wasm_block_rules[] = {
+    {"ICN", "FNJ"},
+    {"FNJ", "ICN"},
+    {"SVO", "KBP"},
+    {"KBP", "SVO"}
+};
+static const size_t g_wasm_block_rule_count = sizeof(g_wasm_block_rules) / sizeof(g_wasm_block_rules[0]);
+
+static bool wasm_is_route_restricted(const char *from, const char *to) {
+    if (!from || !to) return false;
+    for (size_t i = 0; i < g_wasm_block_rule_count; ++i) {
+        if (strncasecmp(from, g_wasm_block_rules[i].origin, 3) == 0 &&
+            strncasecmp(to, g_wasm_block_rules[i].destination, 3) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static size_t wasm_collect_forbidden_countries(const char *origin_code,
+                                                const char **out_countries,
+                                                size_t out_capacity) {
+    if (!origin_code || !out_countries || !g_store.airport_countries) return 0;
+    size_t count = 0;
+    for (size_t i = 0; i < g_wasm_block_rule_count && count < out_capacity; ++i) {
+        if (strncasecmp(g_wasm_block_rules[i].origin, origin_code, 3) != 0) continue;
+        const char *dest_code = g_wasm_block_rules[i].destination;
+        for (size_t j = 0; j < g_store.airport_count; ++j) {
+            if (strncasecmp(g_store.airport_codes[j], dest_code, 3) == 0) {
+                const char *country = g_store.airport_countries[j];
+                if (!country || country[0] == '\0') break;
+                bool already = false;
+                for (size_t k = 0; k < count; ++k) {
+                    if (strcasecmp(out_countries[k], country) == 0) {
+                        already = true;
+                        break;
+                    }
+                }
+                if (!already) out_countries[count++] = country;
+                break;
+            }
+        }
+    }
+    return count;
+}
 
 // We include the .c file here to simplify the WASM build without complex linking for now,
 // or we can rely on Makefile to link them. Let's rely on Makefile.
@@ -77,14 +130,21 @@ const char* nuke_wasm_get_airports_json(void) {
 WASM_KEEPALIVE
 const char* nuke_wasm_search_routes_json(const char *from, const char *to, int max_transfers) {
     if (!g_initialized) return "{\"error\":\"Not initialized\"}";
-    
+
+    if (wasm_is_route_restricted(from, to)) {
+        return "{\"error\":\"Restricted route\",\"results\":0,\"paths\":[]}";
+    }
+
+    const char *forbidden_countries[16];
+    size_t forbidden_count = wasm_collect_forbidden_countries(from, forbidden_countries, 16);
+
     nuke_search_params_t params = {
         .src_code = from,
         .dst_code = to,
         .max_transfers = max_transfers,
         .max_results = 10,
-        .forbidden_countries = NULL,
-        .forbidden_count = 0
+        .forbidden_countries = forbidden_count > 0 ? forbidden_countries : NULL,
+        .forbidden_count = forbidden_count
     };
     
     nuke_path_buffer_t result_buffer;
@@ -217,6 +277,9 @@ const char* nuke_wasm_get_direct_destinations_json(const char *code) {
     size_t cnt = g_store.route_counts[src_idx];
     size_t off = g_store.route_offsets[src_idx];
 
+    const char *forbidden_countries[16];
+    size_t forbidden_count = wasm_collect_forbidden_countries(norm, forbidden_countries, 16);
+
     static char *buffer = NULL;
     static size_t buffer_size = 0;
     size_t needed = 128 + cnt * 128;
@@ -233,6 +296,22 @@ const char* nuke_wasm_get_direct_destinations_json(const char *code) {
     for (size_t i = 0; i < cnt; ++i) {
         size_t dst_idx = g_store.adj_dst_indices[off + i];
         if (dst_idx >= g_store.airport_count) continue;
+
+        // Skip destinations in forbidden countries
+        if (forbidden_count > 0 && g_store.airport_countries) {
+            const char *dst_country = g_store.airport_countries[dst_idx];
+            bool skip = false;
+            if (dst_country && dst_country[0] != '\0') {
+                for (size_t k = 0; k < forbidden_count; ++k) {
+                    if (strcasecmp(dst_country, forbidden_countries[k]) == 0) {
+                        skip = true;
+                        break;
+                    }
+                }
+            }
+            if (skip) continue;
+        }
+
         double dist = g_store.adj_distance[off + i];
         const char *country = g_store.airport_countries ? g_store.airport_countries[dst_idx] : "";
         size_t rem = buffer_size - offset;

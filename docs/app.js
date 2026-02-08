@@ -459,9 +459,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (lat >= 7 && lat <= 84 && lon >= -170 && lon <= -50) return '북미';
     if (lat < 7 && lat >= -60 && lon >= -100 && lon <= -30) return '남미';
     if (lat < -15 && lon >= 100 && lon <= 180) return '오세아니아';
+    if (lat >= 12 && lat <= 42 && lon >= 25 && lon <= 63) return '중동';
     if (lat >= 35 && lon >= -15 && lon <= 60) return '유럽';
     if (lat < 35 && lat >= -40 && lon >= -20 && lon <= 55) return '아프리카';
-    if (lat >= -15 && lon >= 25 && lon <= 55) return '중동';
     if (lat >= -15 && lon > 55 && lon <= 180) return '아시아';
     if (lat >= 5 && lon >= 25 && lon <= 180) return '아시아';
     return '기타';
@@ -477,12 +477,31 @@ document.addEventListener('DOMContentLoaded', () => {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
+  // Hardcoded route restrictions (mirrors server-side logistics_restrictions)
+  const ROUTE_RESTRICTIONS = [
+    { origin: 'ICN', destination: 'FNJ' },
+    { origin: 'FNJ', destination: 'ICN' },
+    { origin: 'SVO', destination: 'KBP' },
+    { origin: 'KBP', destination: 'SVO' }
+  ];
+
+  function getForbiddenCountries(originCode) {
+    const countries = new Set();
+    for (const rule of ROUTE_RESTRICTIONS) {
+      if (rule.origin !== originCode) continue;
+      const dest = state.airportMap.get(rule.destination);
+      if (dest && dest.country) countries.add(dest.country);
+    }
+    return countries;
+  }
+
   function computeBestDestinationsFallback(originCode, continentFilter) {
     if (!state.kernel || state.airports.length === 0) return {};
     const origin = state.airportMap.get(originCode);
     if (!origin) return {};
     const filterContinent = continentFilter || getContinent(origin.lat, origin.lon);
     const originCountry = origin.country || '';
+    const forbiddenCountries = getForbiddenCountries(originCode);
 
     // --- Tier 1: Spatial filtering (500km / 1000km bounding box) ---
     const tier1Near = [];
@@ -492,6 +511,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (getContinent(a.lat, a.lon) !== filterContinent) continue;
       // Skip domestic (same-country) destinations
       if (originCountry && a.country && a.country === originCountry) continue;
+      // Skip destinations in forbidden countries
+      if (a.country && forbiddenCountries.has(a.country)) continue;
       const dist = haversineKm(origin.lat, origin.lon, a.lat, a.lon);
       if (dist <= 500) tier1Near.push(a);
       else if (dist <= 1000) tier1Far.push(a);
@@ -510,6 +531,8 @@ document.addEventListener('DOMContentLoaded', () => {
           const existing = state.airportMap.get(d.code);
           const destCountry = d.country || existing?.country || '';
           if (originCountry && destCountry && destCountry === originCountry) continue;
+          // Skip destinations in forbidden countries
+          if (destCountry && forbiddenCountries.has(destCountry)) continue;
           if (d.connections >= HUB_MIN_CONNECTIONS) {
             if (existing) tier2Hubs.push(existing);
           }
@@ -534,6 +557,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (a.code === originCode || seen.has(a.code)) return false;
         // Skip domestic (same-country) destinations
         if (originCountry && a.country && a.country === originCountry) return false;
+        // Skip destinations in forbidden countries
+        if (a.country && forbiddenCountries.has(a.country)) return false;
         return getContinent(a.lat, a.lon) === filterContinent;
       });
       for (const a of remaining) {

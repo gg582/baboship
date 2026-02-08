@@ -37,6 +37,8 @@ When searching for routes from an origin airport:
 - **Header file** (`include/nuke_flight.h`): Added `forbidden_countries` and `forbidden_count` to `nuke_search_params_t`
 - **Route search** (`src/nuke_flight.c`): Added `is_country_forbidden()` check in the path exploration loop
 - **Server handler** (`src/server.c`): Automatically collects forbidden countries based on block rules before search
+- **WASM kernel** (`wasm/nuke_kernel.c`): Hardcoded restriction rules applied to client-side route search and direct destination listing
+- **Best destinations** (`docs/app.js`, `docs/best-worker.js`): Forbidden countries excluded from candidate selection in optimal destination computation
 
 #### Example
 Given these restrictions:
@@ -49,7 +51,8 @@ The system will:
 2. ✅ Allow multi-hop routes: ICN → NRT (Japan) → LAX (USA)
 3. ❌ Block direct routes: ICN → FNJ (North Korea)
 4. ❌ Block indirect routes: ICN → PEK → FNJ (China → North Korea)
-5. ❌ Block any path: ICN → ... → [any North Korean airport]
+5. ❌ Block indirect routes: ICN → SHE → FNJ (Shenyang → North Korea)
+6. ❌ Block any path: ICN → ... → [any North Korean airport]
 
 ## Testing
 
