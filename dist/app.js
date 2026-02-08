@@ -13,13 +13,17 @@ const state = {
 
 // Mobile device detection
 function detectMobile() {
+  // Primary check: user agent for common mobile/tablet devices
   const userAgent = navigator.userAgent || navigator.vendor || window.opera;
-  // Check for mobile user agents
-  const mobileRegex = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile|tablet/i;
-  // Also check for touch support and screen size
+  const mobileRegex = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i;
+  
+  // Feature detection: touch support combined with screen size
   const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-  const isSmallScreen = window.innerWidth <= 768;
-  return mobileRegex.test(userAgent.toLowerCase()) || (hasTouch && isSmallScreen);
+  const isMobileScreen = window.innerWidth <= 768;
+  
+  // Return true if user agent matches mobile patterns, or if device has touch and smaller screen
+  // This allows iPads to be detected via user agent but excludes desktop touch screens
+  return mobileRegex.test(userAgent.toLowerCase()) || (hasTouch && isMobileScreen);
 }
 
 // WASM Module Loader
@@ -746,9 +750,8 @@ document.addEventListener('DOMContentLoaded', () => {
   async function init() {
     // Detect mobile device
     state.isMobile = detectMobile();
-    console.log('Device type:', state.isMobile ? 'Mobile' : 'Desktop');
     
-    // Setup touch gestures for mobile devices
+    // Setup touch gestures for mobile devices (must be after mobile detection)
     setupTouchGestures();
     
     await initServiceWorker();
