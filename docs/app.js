@@ -7,8 +7,24 @@ const state = {
   best: [],
   kernel: null,
   bestWorker: null,
-  bestRequestId: 0
+  bestRequestId: 0,
+  isMobile: false
 };
+
+// Mobile device detection
+function detectMobile() {
+  // Primary check: user agent for common mobile/tablet devices
+  const userAgent = navigator.userAgent || navigator.vendor || window.opera;
+  const mobileRegex = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i;
+  
+  // Feature detection: touch support combined with screen size
+  const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  const isMobileScreen = window.innerWidth <= 768;
+  
+  // Return true if user agent matches mobile patterns, or if device has touch and smaller screen
+  // This allows iPads to be detected via user agent but excludes desktop touch screens
+  return mobileRegex.test(userAgent.toLowerCase()) || (hasTouch && isMobileScreen);
+}
 
 // WASM Module Loader
 async function initWasm() {
@@ -199,6 +215,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   let statusBeforeModal = '';
   const dragState = { active: false, pointerId: null, lastX: 0, lastY: 0, moved: false, blockClick: false };
+  const touchState = { touches: [], initialDistance: 0, initialZoom: 1 };
   const mapCanvases = new Map();
 
   function registerCanvas(key, element) { if (!element) return; mapCanvases.set(key, { canvas: element, ctx: element.getContext('2d') }); }
@@ -378,6 +395,44 @@ document.addEventListener('DOMContentLoaded', () => {
     drawAllScenes();
   }
 
+  // Touch gesture handlers for mobile pinch-to-zoom
+  function getTouchDistance(touch1, touch2) {
+    const dx = touch2.clientX - touch1.clientX;
+    const dy = touch2.clientY - touch1.clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  function handleTouchStart(canvas, e) {
+    if (!state.isMobile) return;
+    touchState.touches = Array.from(e.touches);
+    if (touchState.touches.length === 2) {
+      e.preventDefault();
+      touchState.initialDistance = getTouchDistance(touchState.touches[0], touchState.touches[1]);
+      touchState.initialZoom = view.zoom;
+    }
+  }
+
+  function handleTouchMove(canvas, e) {
+    if (!state.isMobile) return;
+    if (e.touches.length === 2) {
+      e.preventDefault();
+      const currentDistance = getTouchDistance(e.touches[0], e.touches[1]);
+      const scale = currentDistance / touchState.initialDistance;
+      view.zoom = Math.min(view.maxZoom, Math.max(view.minZoom, touchState.initialZoom * scale));
+      clampViewCenter();
+      drawAllScenes();
+    }
+  }
+
+  function handleTouchEnd(canvas, e) {
+    if (!state.isMobile) return;
+    touchState.touches = Array.from(e.touches);
+    if (touchState.touches.length < 2) {
+      touchState.initialDistance = 0;
+      touchState.initialZoom = view.zoom;
+    }
+  }
+
   function openMapModal() {
     statusBeforeModal = statusEl.textContent;
     mapModal.classList.add('open'); mapModal.setAttribute('aria-hidden', 'false');
@@ -397,6 +452,16 @@ document.addEventListener('DOMContentLoaded', () => {
     canvas.addEventListener('wheel', handleWheel, { passive: false });
     canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); openMapModal(); });
   });
+
+  function setupTouchGestures() {
+    if (state.isMobile) {
+      [mainCanvas, modalCanvas].forEach(canvas => {
+        canvas.addEventListener('touchstart', (e) => handleTouchStart(canvas, e), { passive: false });
+        canvas.addEventListener('touchmove', (e) => handleTouchMove(canvas, e), { passive: false });
+        canvas.addEventListener('touchend', (e) => handleTouchEnd(canvas, e), { passive: false });
+      });
+    }
+  }
 
   modalCloseBtn.addEventListener('click', closeMapModal);
   mapModal.addEventListener('click', (e) => { if (e.target === mapModal) closeMapModal(); });
@@ -683,6 +748,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function init() {
+    // Detect mobile device
+    state.isMobile = detectMobile();
+    
+    // Setup touch gestures for mobile devices (must be after mobile detection)
+    setupTouchGestures();
+    
     await initServiceWorker();
     await initWasm();
     await fetchAirports();

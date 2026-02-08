@@ -1,11 +1,11 @@
 :root {
     color-scheme: light;
     font-family: 'IBM Plex Sans KR', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-    --bg: #f5f6f8;
-    --card: #fcfcfd;
-    --card-border: #d7dde7;
-    --accent: #0b5fff;
-    --accent-soft: #1446c2;
+    --bg: #f4f5f7;
+    --card: #ffffff;
+    --card-border: #e0e3ea;
+    --accent: #e8661b;
+    --accent-soft: #c55717;
     --muted: #5a6072;
     --text: #111827;
     --outline: #c0c7d6;
@@ -38,8 +38,9 @@ body {
 
 .card {
     background: var(--card);
-    border-radius: 12px;
+    border-radius: 0;
     border: 1px solid var(--card-border);
+    border-left: 3px solid var(--accent);
     padding: 1.5rem;
     box-shadow: none;
 }
@@ -48,6 +49,19 @@ body {
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+    position: relative;
+    overflow: hidden;
+}
+
+.hero-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 120px;
+    height: 100%;
+    background: linear-gradient(135deg, transparent 40%, rgba(232, 102, 27, 0.06) 40%);
+    pointer-events: none;
 }
 
 .hero-card h1 {
@@ -66,11 +80,12 @@ body {
     align-items: center;
     gap: 0.4rem;
     padding: 0.35rem 0.85rem;
-    border-radius: 999px;
-    border: 1px solid var(--outline);
-    background: #f8f9ff;
-    color: var(--accent);
+    border-radius: 0;
+    border: none;
+    background: var(--accent);
+    color: #fff;
     font-size: 0.85rem;
+    font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
@@ -84,9 +99,10 @@ body {
 
 .stat {
     border: 1px solid var(--card-border);
-    border-radius: 12px;
+    border-radius: 0;
     padding: 1rem;
     background: #fefefe;
+    border-top: 2px solid var(--accent);
 }
 
 .stat .label {
@@ -125,7 +141,7 @@ label {
 }
 
 input {
-    border-radius: 10px;
+    border-radius: 0;
     border: 1px solid var(--card-border);
     padding: 0.75rem 1rem;
     font-size: 1rem;
@@ -137,14 +153,14 @@ input {
 input:focus {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+    box-shadow: 0 0 0 2px rgba(232, 102, 27, 0.15);
 }
 
 button {
     font: inherit;
     border: none;
     cursor: pointer;
-    border-radius: 10px;
+    border-radius: 0;
     padding: 0.85rem 1.4rem;
     background: var(--accent);
     color: #fff;
@@ -193,14 +209,15 @@ button.ghost:hover {
 }
 
 .map-mode button.active {
-    background: rgba(37, 99, 235, 0.12);
-    border-color: rgba(37, 99, 235, 0.4);
-    color: var(--accent);
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
 }
 
 #map-wrapper {
     position: relative;
-    border-radius: 12px;
+    border-radius: 0;
     overflow: hidden;
     border: 1px solid var(--card-border);
     min-height: 360px;
@@ -212,7 +229,10 @@ button.ghost:hover {
     height: 100%;
     display: block;
     cursor: grab;
-    border-radius: 12px;
+    border-radius: 0;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
 }
 
 .map-canvas.dragging {
@@ -256,7 +276,7 @@ button.ghost:hover {
     height: min(85vh, 820px);
     background: #020817;
     border: 1px solid rgba(148, 163, 184, 0.2);
-    border-radius: 20px;
+    border-radius: 0;
     box-shadow: 0 30px 80px rgba(15, 23, 42, 0.65);
     padding: 2.5rem;
     display: flex;
@@ -276,7 +296,7 @@ button.ghost:hover {
     right: 18px;
     width: 36px;
     height: 36px;
-    border-radius: 999px;
+    border-radius: 0;
     border: 1px solid rgba(148, 163, 184, 0.35);
     background: rgba(15, 23, 42, 0.9);
     color: #f8fafc;
@@ -288,8 +308,8 @@ button.ghost:hover {
 }
 
 .map-modal-close:hover {
-    background: rgba(30, 64, 175, 0.9);
-    border-color: rgba(59, 130, 246, 0.7);
+    background: rgba(232, 102, 27, 0.9);
+    border-color: rgba(232, 102, 27, 0.7);
 }
 
 .selection-panel {
@@ -301,7 +321,7 @@ button.ghost:hover {
 
 .selection-pill {
     padding: 0.5rem 1rem;
-    border-radius: 999px;
+    border-radius: 0;
     border: 1px solid var(--card-border);
     background: #f8fafc;
     display: inline-flex;
@@ -351,9 +371,10 @@ button.ghost:hover {
 
 .result-card {
     border: 1px solid var(--card-border);
-    border-radius: 12px;
+    border-radius: 0;
     padding: 1.1rem;
     background: #fdfdfd;
+    border-left: 3px solid var(--accent);
 }
 
 .result-card h3 {
@@ -375,20 +396,21 @@ button.ghost:hover {
 
 .tag {
     padding: 0.3rem 0.7rem;
-    border-radius: 999px;
-    background: #eef2ff;
+    border-radius: 0;
+    background: #fff3e8;
     color: var(--muted);
     font-size: 0.85rem;
 }
 
 .tag.accent {
-    background: rgba(37, 99, 235, 0.12);
-    color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
 }
 
 .empty-state {
     padding: 1rem;
-    border-radius: 12px;
+    border-radius: 0;
     border: 1px dashed var(--card-border);
     text-align: center;
     color: var(--muted);
@@ -403,12 +425,13 @@ button.ghost:hover {
 
 .best-card-item {
     border: 1px solid var(--card-border);
-    border-radius: 12px;
+    border-radius: 0;
     padding: 1rem;
     background: #fff;
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
+    border-top: 2px solid var(--accent);
 }
 
 .best-card-header {
@@ -477,6 +500,12 @@ button.ghost:hover {
     }
 
     #map-wrapper {
-        min-height: 260px;
+        min-height: 450px;
+    }
+
+    .map-modal-content {
+        width: 95vw;
+        height: 90vh;
+        padding: 1.5rem;
     }
 }
