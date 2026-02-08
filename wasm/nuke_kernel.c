@@ -82,7 +82,9 @@ const char* nuke_wasm_search_routes_json(const char *from, const char *to, int m
         .src_code = from,
         .dst_code = to,
         .max_transfers = max_transfers,
-        .max_results = 10
+        .max_results = 10,
+        .forbidden_countries = NULL,
+        .forbidden_count = 0
     };
     
     nuke_path_buffer_t result_buffer;

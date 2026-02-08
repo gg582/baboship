@@ -34,6 +34,8 @@ typedef struct {
     const char *dst_code;
     size_t max_transfers;
     size_t max_results;
+    const char **forbidden_countries;
+    size_t forbidden_count;
 } nuke_search_params_t;
 
 typedef struct {
