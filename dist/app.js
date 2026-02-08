@@ -573,9 +573,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (lat >= 7 && lat <= 84 && lon >= -170 && lon <= -50) return '북미';
     if (lat < 7 && lat >= -60 && lon >= -100 && lon <= -30) return '남미';
     if (lat < -15 && lon >= 100 && lon <= 180) return '오세아니아';
+    if (lat >= 12 && lat <= 42 && lon >= 25 && lon <= 63) return '중동';
     if (lat >= 35 && lon >= -15 && lon <= 60) return '유럽';
     if (lat < 35 && lat >= -40 && lon >= -20 && lon <= 55) return '아프리카';
-    if (lat >= -15 && lon >= 25 && lon <= 55) return '중동';
     if (lat >= -15 && lon > 55 && lon <= 180) return '아시아';
     if (lat >= 5 && lon >= 25 && lon <= 180) return '아시아';
     return '기타';

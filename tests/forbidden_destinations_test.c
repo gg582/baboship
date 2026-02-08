@@ -130,6 +130,38 @@ int main(void) {
     cwist_http_response_destroy(res3);
     cwist_http_request_destroy(req3);
 
+    // Test 4: ICN -> SHE route should not include FNJ as intermediate
+    // This specifically validates that ICN -> SHE -> FNJ is excluded
+    printf("\n=== Test 4: ICN -> SHE should not route through FNJ ===\n");
+    cwist_http_request *req4 = cwist_http_request_create();
+    cwist_http_response *res4 = cwist_http_response_create();
+    req4->db = g_state.meta_db;
+    if (!req4->query_params) req4->query_params = cwist_query_map_create();
+    cwist_query_map_set(req4->query_params, "from", "ICN");
+    cwist_query_map_set(req4->query_params, "to", "SHE");
+    cwist_query_map_set(req4->query_params, "maxTransfers", "5");
+    cwist_query_map_set(req4->query_params, "maxResults", "50");
+
+    routes_handler(req4, res4);
+    printf("Response status: %d\n", res4->status_code);
+
+    if (res4->status_code == CWIST_HTTP_OK) {
+        const char *body4 = res4->body && res4->body->data ? res4->body->data : "";
+        if (strstr(body4, "FNJ") != NULL) {
+            fprintf(stderr, "FAIL: ICN->SHE results contain FNJ (North Korea)\n");
+            printf("Response body: %s\n", body4);
+            cwist_http_response_destroy(res4);
+            cwist_http_request_destroy(req4);
+            cleanup();
+            return 1;
+        }
+        printf("PASS: ICN->SHE results do not include North Korean airports\n");
+    } else {
+        printf("INFO: ICN->SHE search returned status %d (OK if airport not in dataset)\n", res4->status_code);
+    }
+    cwist_http_response_destroy(res4);
+    cwist_http_request_destroy(req4);
+
     printf("\n=== All tests passed ===\n");
     cleanup();
     return 0;
