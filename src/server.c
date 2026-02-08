@@ -360,6 +360,95 @@ static bool normalize_iata_code(const char *input, char output[4]) {
     return true;
 }
 
+static size_t collect_forbidden_countries_for_origin(const char *origin_code,
+                                                      const char ***out_countries) {
+    if (!origin_code || !out_countries) return 0;
+    
+    // First pass: count unique forbidden countries
+    size_t unique_count = 0;
+    char **temp_countries = NULL;
+    size_t temp_capacity = 8;
+    
+    temp_countries = malloc(sizeof(char*) * temp_capacity);
+    if (!temp_countries) return 0;
+    
+    for (size_t i = 0; i < g_block_rule_count; ++i) {
+        if (strcasecmp(g_block_rules[i].origin, origin_code) != 0) {
+            continue;
+        }
+        
+        // Get the country of the destination airport
+        const char *dest_code = g_block_rules[i].destination;
+        if (!dest_code || strlen(dest_code) != 3) continue;
+        
+        // Find the destination airport in the store
+        bool found_country = false;
+        for (size_t j = 0; j < g_state.store.airport_count; ++j) {
+            if (strncasecmp(g_state.store.airport_codes[j], dest_code, 3) == 0) {
+                const char *country = g_state.store.airport_countries[j];
+                if (!country || country[0] == '\0') break;
+                
+                // Check if already in list
+                bool already_added = false;
+                for (size_t k = 0; k < unique_count; ++k) {
+                    if (strcasecmp(temp_countries[k], country) == 0) {
+                        already_added = true;
+                        break;
+                    }
+                }
+                
+                if (!already_added) {
+                    if (unique_count >= temp_capacity) {
+                        temp_capacity *= 2;
+                        char **new_temp = realloc(temp_countries, sizeof(char*) * temp_capacity);
+                        if (!new_temp) {
+                            for (size_t k = 0; k < unique_count; ++k) free(temp_countries[k]);
+                            free(temp_countries);
+                            return 0;
+                        }
+                        temp_countries = new_temp;
+                    }
+                    temp_countries[unique_count] = strdup(country);
+                    if (!temp_countries[unique_count]) {
+                        for (size_t k = 0; k < unique_count; ++k) free(temp_countries[k]);
+                        free(temp_countries);
+                        return 0;
+                    }
+                    unique_count++;
+                }
+                found_country = true;
+                break;
+            }
+        }
+        if (!found_country) {
+            // If we can't find the country, skip this rule
+            continue;
+        }
+    }
+    
+    if (unique_count == 0) {
+        free(temp_countries);
+        *out_countries = NULL;
+        return 0;
+    }
+    
+    // Allocate final array
+    const char **result = malloc(sizeof(const char*) * unique_count);
+    if (!result) {
+        for (size_t k = 0; k < unique_count; ++k) free(temp_countries[k]);
+        free(temp_countries);
+        return 0;
+    }
+    
+    for (size_t k = 0; k < unique_count; ++k) {
+        result[k] = temp_countries[k];
+    }
+    free(temp_countries);
+    
+    *out_countries = result;
+    return unique_count;
+}
+
 static bool is_route_restricted(const char *from, const char *to, const char **reason) {
     if (!from || !to) return false;
     for (size_t i = 0; i < g_block_rule_count; ++i) {
@@ -536,8 +625,18 @@ static void routes_handler(cwist_http_request *req, cwist_http_response *res) {
     if (max_results > 128) max_results = 128;
     if (max_results == 0) max_results = 16;
 
+    // Collect forbidden countries based on block rules from the origin
+    const char **forbidden_countries = NULL;
+    size_t forbidden_count = collect_forbidden_countries_for_origin(from_code, &forbidden_countries);
+
     nuke_path_buffer_t buffer;
     if (nuke_path_buffer_init(&buffer, max_results) != CWIST_NUKE_OK) {
+        if (forbidden_countries) {
+            for (size_t i = 0; i < forbidden_count; ++i) {
+                free((void*)forbidden_countries[i]);
+            }
+            free(forbidden_countries);
+        }
         cJSON *err = cJSON_CreateObject();
         cJSON_AddStringToObject(err, "error", "Unable to reserve memory.");
         write_json_response(res, err, CWIST_HTTP_INTERNAL_ERROR);
@@ -548,12 +647,20 @@ static void routes_handler(cwist_http_request *req, cwist_http_response *res) {
         .src_code = from_code,
         .dst_code = to_code,
         .max_transfers = max_transfers,
-        .max_results = max_results
+        .max_results = max_results,
+        .forbidden_countries = forbidden_countries,
+        .forbidden_count = forbidden_count
     };
 
     int rc = nuke_search_routes(&g_state.store, &params, &buffer);
     if (rc != CWIST_NUKE_OK) {
         nuke_path_buffer_free(&buffer);
+        if (forbidden_countries) {
+            for (size_t i = 0; i < forbidden_count; ++i) {
+                free((void*)forbidden_countries[i]);
+            }
+            free(forbidden_countries);
+        }
         cJSON *err = cJSON_CreateObject();
         cJSON_AddStringToObject(err, "error", "Route search failed.");
         write_json_response(res, err, CWIST_HTTP_INTERNAL_ERROR);
@@ -585,6 +692,14 @@ static void routes_handler(cwist_http_request *req, cwist_http_response *res) {
 
     write_json_response(res, root, CWIST_HTTP_OK);
     nuke_path_buffer_free(&buffer);
+    
+    // Clean up forbidden countries array
+    if (forbidden_countries) {
+        for (size_t i = 0; i < forbidden_count; ++i) {
+            free((void*)forbidden_countries[i]);
+        }
+        free(forbidden_countries);
+    }
 }
 
 static void best_handler(cwist_http_request *req, cwist_http_response *res) {

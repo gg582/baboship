@@ -55,6 +55,8 @@ typedef struct {
     size_t dst_idx;
     size_t src_idx;
     double gc_distance;
+    const char **forbidden_countries;
+    size_t forbidden_count;
 } nuke_worker_group_t;
 
 typedef struct {
@@ -570,6 +572,24 @@ static void append_result_locked(nuke_worker_group_t *group,
     }
 }
 
+static bool is_country_forbidden(const nuke_flight_store_t *store,
+                                  size_t airport_idx,
+                                  const char **forbidden_countries,
+                                  size_t forbidden_count) {
+    if (!forbidden_countries || forbidden_count == 0) return false;
+    if (airport_idx >= store->airport_count) return false;
+    
+    const char *airport_country = store->airport_countries[airport_idx];
+    if (!airport_country || airport_country[0] == '\0') return false;
+    
+    for (size_t k = 0; k < forbidden_count; ++k) {
+        if (forbidden_countries[k] && strcasecmp(airport_country, forbidden_countries[k]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void worker_execute(void *arg) {
     nuke_worker_job_t *job = (nuke_worker_job_t *)arg;
     if (!job || !job->group) {
@@ -630,6 +650,11 @@ static void worker_execute(void *arg) {
             size_t idx = offset + i;
             size_t next_airport = store->adj_dst_indices[idx];
             if (next_airport >= store->airport_count) continue;
+
+            // Check if this airport's country is forbidden
+            if (is_country_forbidden(store, next_airport, group->forbidden_countries, group->forbidden_count)) {
+                continue;
+            }
 
             bool seen = false;
             for (size_t j = 0; j < frame.path_len; ++j) {
@@ -754,7 +779,9 @@ int nuke_search_routes(nuke_flight_store_t *store,
             .max_legs = t + 1,
             .dst_idx = dst_idx,
             .src_idx = src_idx,
-            .gc_distance = gc
+            .gc_distance = gc,
+            .forbidden_countries = params->forbidden_countries,
+            .forbidden_count = params->forbidden_count
         };
         atomic_store(&group.pending_jobs, 0);
         atomic_store(&group.stop, false);
@@ -775,7 +802,9 @@ int nuke_search_routes(nuke_flight_store_t *store,
             .max_legs = t + 1,
             .dst_idx = dst_idx,
             .src_idx = src_idx,
-            .gc_distance = gc
+            .gc_distance = gc,
+            .forbidden_countries = params->forbidden_countries,
+            .forbidden_count = params->forbidden_count
         };
         pthread_mutex_init(&group.buffer_lock, NULL);
         pthread_mutex_init(&group.wait_lock, NULL);
