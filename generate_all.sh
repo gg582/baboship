@@ -63,6 +63,13 @@ run_py scripts/export_nuke_blob.py data/nuke_routes.db docs/wasm/nuke_blob.bin
 log "Rendering static index template"
 run_py scripts/generate_static_index.py
 
+if [[ -f "$ROOT_DIR/data/tracking_country_hubs.sql" ]]; then
+  log "Compiling tracking country hub hints"
+  run_py scripts/generate_country_hubs_header.py --sql "$ROOT_DIR/data/tracking_country_hubs.sql" --header "$ROOT_DIR/include/tracking_country_hubs.h"
+else
+  log "[skip] data/tracking_country_hubs.sql not found"
+fi
+
 IMPC_SOURCE="${IMPC_SOURCE:-}"
 if [[ -z "$IMPC_SOURCE" ]]; then
   for candidate in data/impc_nodes.json data/impc_nodes.csv; do

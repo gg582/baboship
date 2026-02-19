@@ -15,7 +15,9 @@ def render_template():
     variables = {
         'app_name': '바보쉽 라우트 콘솔',
         'hero_pill': 'Global Freight Control',
-        'hero_body': '실시간 항로 지표와 통제된 규제를 결합해, 배송 최단 시간 경로를 한 화면에서 설계하세요.'
+        'hero_body': '실시간 항로 지표와 통제된 규제를 결합해, 배송 최단 시간 경로를 한 화면에서 설계하세요.',
+        'tracker_api_base': os.environ.get('TRACKER_API_BASE', 'https://apis.tracker.delivery'),
+        'tracker_api_key': os.environ.get('TRACKER_API_KEY', '')
     }
 
     # Replace variables

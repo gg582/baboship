@@ -9,6 +9,17 @@
 
 #include "nuke_flight.h"
 #include "logistics_engine.h"
+#include "tracking_country_hubs.h"
+
+#if defined(__has_include)
+#  if __has_include("impc_data.h")
+#    include "impc_data.h"
+#    define HAS_IMPC_DATA 1
+#  endif
+#endif
+#ifndef HAS_IMPC_DATA
+#define HAS_IMPC_DATA 0
+#endif
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -36,6 +47,16 @@ typedef struct {
     const char *alias;
     const char *iata;
 } location_alias_t;
+
+typedef struct {
+    const char *city;
+    const char *iata;
+} impc_city_hint_t;
+
+typedef struct {
+    const char *iso;
+    const char *iata;
+} impc_country_hint_t;
 
 typedef struct {
     strview_t tokens[MAX_LOG_TOKENS];
@@ -76,6 +97,49 @@ static const location_alias_t g_aliases[] = {
     {"CHEKLA", "HKG"}
 };
 static const size_t g_alias_count = sizeof(g_aliases) / sizeof(g_aliases[0]);
+
+static const impc_city_hint_t g_impc_city_hints[] = {
+    {"BJS", "PEK"},
+    {"OSA", "KIX"},
+    {"PAR", "CDG"},
+    {"ROM", "FCO"},
+    {"SEL", "ICN"},
+    {"SHA", "PVG"},
+    {"TYO", "NRT"},
+    {"NYC", "JFK"},
+    {"CHI", "ORD"},
+    {"LON", "LHR"},
+    {"MOW", "SVO"},
+    {"BER", "BER"},
+    {"AMS", "AMS"}
+};
+static const size_t g_impc_city_hint_count = sizeof(g_impc_city_hints) / sizeof(g_impc_city_hints[0]);
+
+static const impc_country_hint_t g_impc_country_hints[] = {
+    {"AE", "DXB"},
+    {"AU", "SYD"},
+    {"BR", "GRU"},
+    {"CA", "YYZ"},
+    {"CN", "PVG"},
+    {"DE", "FRA"},
+    {"FR", "CDG"},
+    {"GB", "LHR"},
+    {"HK", "HKG"},
+    {"HU", "BUD"},
+    {"IN", "DEL"},
+    {"IT", "FCO"},
+    {"JP", "NRT"},
+    {"KR", "ICN"},
+    {"NL", "AMS"},
+    {"QA", "DOH"},
+    {"RU", "SVO"},
+    {"SG", "SIN"},
+    {"TH", "BKK"},
+    {"TR", "IST"},
+    {"US", "JFK"},
+    {"ZA", "JNB"}
+};
+static const size_t g_impc_country_hint_count = sizeof(g_impc_country_hints) / sizeof(g_impc_country_hints[0]);
 
 static edi_state_t g_state;
 static char g_result_buffer[RESULT_BUFFER_SIZE];
@@ -134,17 +198,101 @@ static const char* lookup_alias_code(strview_t token) {
     return NULL;
 }
 
+static const tracking_country_hub_t* lookup_country_hub(const char iso[3]) {
+    size_t lo = 0;
+    size_t hi = TRACKING_COUNTRY_HUB_COUNT;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        int cmp = strncmp(iso, TRACKING_COUNTRY_HUBS[mid].iso, 2);
+        if (cmp == 0) {
+            return &TRACKING_COUNTRY_HUBS[mid];
+        }
+        if (cmp < 0) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    return NULL;
+}
+
+static bool resolve_country_code_token(const char upper[3], route_node_t *out) {
+    if (!upper || !out) return false;
+    for (size_t i = 0; i < 2; ++i) {
+        if (!isalpha((unsigned char)upper[i])) {
+            return false;
+        }
+    }
+    char iso[3] = {upper[0], upper[1], '\0'};
+    const tracking_country_hub_t *hub = lookup_country_hub(iso);
+    if (!hub) return false;
+    return lookup_airport_coords(hub->iata, out);
+}
+
+#if HAS_IMPC_DATA
+static bool lookup_impc_table(const char *code, route_node_t *out) {
+    size_t lo = 0;
+    size_t hi = IMPC_TABLE_SIZE;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        int cmp = strncmp(code, IMPC_TABLE[mid].impc, 6);
+        if (cmp == 0) {
+            const impc_mapping_t *entry = &IMPC_TABLE[mid];
+            memcpy(out->iata, entry->iata, 3);
+            out->iata[3] = '\0';
+            out->lat = entry->lat;
+            out->lon = entry->lon;
+            return true;
+        }
+        if (cmp < 0) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    return false;
+}
+#endif
+
+static const char* lookup_impc_city_hint(const char city[4]) {
+    for (size_t i = 0; i < g_impc_city_hint_count; ++i) {
+        if (strncmp(city, g_impc_city_hints[i].city, 3) == 0) {
+            return g_impc_city_hints[i].iata;
+        }
+    }
+    return NULL;
+}
+
+static const char* lookup_impc_country_hint(const char iso[3]) {
+    for (size_t i = 0; i < g_impc_country_hint_count; ++i) {
+        if (strncmp(iso, g_impc_country_hints[i].iso, 2) == 0) {
+            return g_impc_country_hints[i].iata;
+        }
+    }
+    return NULL;
+}
+
 static bool resolve_impc_token(const char *upper, size_t len, route_node_t *out) {
     if (len != 6) return false;
     for (size_t i = 0; i < len; ++i) {
         if (!isalpha((unsigned char)upper[i])) return false;
     }
-    char iata[4];
-    iata[0] = upper[2];
-    iata[1] = upper[3];
-    iata[2] = upper[4];
-    iata[3] = '\0';
-    return lookup_airport_coords(iata, out);
+    char iso[3] = {upper[0], upper[1], '\0'};
+    char city[4] = {upper[2], upper[3], upper[4], '\0'};
+
+#if HAS_IMPC_DATA
+    if (lookup_impc_table(upper, out)) return true;
+#endif
+
+    if (lookup_airport_coords(city, out)) return true;
+
+    const char *city_hint = lookup_impc_city_hint(city);
+    if (city_hint && lookup_airport_coords(city_hint, out)) return true;
+
+    const char *country_hint = lookup_impc_country_hint(iso);
+    if (country_hint && lookup_airport_coords(country_hint, out)) return true;
+
+    return false;
 }
 
 static bool is_location_char(int ch) {
@@ -156,7 +304,7 @@ static bool is_timestamp_char(int ch) {
 }
 
 static void push_token(log_parse_result_t *out, const char *ptr, size_t len) {
-    if (len < 3 || out->token_count >= MAX_LOG_TOKENS) return;
+    if (len < 2 || out->token_count >= MAX_LOG_TOKENS) return;
     out->tokens[out->token_count++] = (strview_t){ptr, len};
 }
 
@@ -235,9 +383,11 @@ static bool resolve_token_to_node(strview_t token, route_node_t *out) {
     if (!out) return false;
     char buffer[16];
     size_t len = copy_upper(token.ptr, token.len, buffer, sizeof(buffer));
-    if (len < 3) return false;
+    if (len < 2) return false;
 
     if (resolve_impc_token(buffer, len, out)) return true;
+
+    if (len == 2 && resolve_country_code_token(buffer, out)) return true;
 
     if (len == 3 && lookup_airport_coords(buffer, out)) return true;
 

@@ -43,7 +43,9 @@ const assetPaths = {
   serviceWorker: resolveAsset('sw.js')
 };
 
-const TRACKER_DELIVERY_API = 'https://apis.tracker.delivery';
+const trackerConfig = (typeof window !== 'undefined' && window.__baboship_config) ? window.__baboship_config : {};
+const TRACKER_DELIVERY_API = trackerConfig.trackerApiBase || 'https://apis.tracker.delivery';
+const TRACKER_API_KEY = trackerConfig.trackerApiKey || '';
 
 function clampNumber(value, min, max) {
   const num = Number(value);
@@ -512,8 +514,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (statWorkers) statWorkers.textContent = '로컬 모드';
   }
 
-  function normalizeTrackingLocation(name, code) {
-    const candidates = [code, name].filter(Boolean);
+  function normalizeTrackingLocation(name, code, isoCode) {
+    const normalizedIso = (isoCode || '').trim().toUpperCase();
+    const candidates = [code, name, normalizedIso].filter(Boolean);
     for (const candidate of candidates) {
       for (const hint of LOCATION_HINTS) {
         if (hint.pattern.test(candidate)) return hint.alias;
@@ -522,6 +525,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (cleaned.length >= 6) return cleaned.slice(0, 6);
       if (cleaned.length === 3) return cleaned;
     }
+    if (normalizedIso.length === 2) return normalizedIso;
     return '';
   }
 
@@ -620,13 +624,15 @@ document.addEventListener('DOMContentLoaded', () => {
     return rawEvents.map(progress => {
       const location = progress?.location?.name || progress?.location?.display || progress?.location || progress?.officeName || '';
       const code = progress?.location?.code || progress?.code || '';
-      const alias = normalizeTrackingLocation(location, code);
+      const countryCode = (progress?.location?.countryCode || progress?.countryCode || progress?.country || '').toString().trim().toUpperCase();
+      const alias = normalizeTrackingLocation(location, code, countryCode);
       const date = getEventDate(progress);
       const token = formatTimestampToken(date);
       if (!alias || !token) return null;
       return {
         alias,
-        locationName: location || alias,
+        countryCode,
+        locationName: location ? (countryCode ? `${location} (${countryCode})` : location) : (countryCode || alias),
         statusText: progress?.status?.text || progress?.description || progress?.message || '',
         statusCode: progress?.status?.code || '',
         timestampToken: token,
@@ -644,8 +650,12 @@ document.addEventListener('DOMContentLoaded', () => {
     for (const carrier of candidates) {
       const endpoint = `${TRACKER_DELIVERY_API}/carriers/${carrier.id}/tracks/${encodeURIComponent(invoice)}`;
       try {
+        const headers = { 'Accept': 'application/json' };
+        if (TRACKER_API_KEY) {
+          headers['X-Tracker-API-Key'] = TRACKER_API_KEY;
+        }
         const response = await fetch(endpoint, {
-          headers: { 'Accept': 'application/json' },
+          headers,
           mode: 'cors'
         });
         const rawBody = await response.text();
@@ -724,16 +734,21 @@ document.addEventListener('DOMContentLoaded', () => {
       trackingTimeline.innerHTML = '<div class="empty-state">우체국 이벤트가 없습니다.</div>';
       return;
     }
-    trackingTimeline.innerHTML = events.map(evt => `
+    trackingTimeline.innerHTML = events.map(evt => {
+      const tags = [];
+      if (evt.alias) tags.push(evt.alias);
+      if (evt.countryCode && evt.countryCode !== evt.alias) tags.push(evt.countryCode);
+      return `
       <div class="timeline-item">
         <div class="timeline-time">${evt.displayTime}</div>
         <div class="timeline-details">
           <strong>${evt.locationName}</strong>
           <span>${evt.statusText || ''}</span>
-          <span class="tag">${evt.alias}</span>
+          ${tags.map(tag => `<span class="tag">${tag}</span>`).join('')}
         </div>
       </div>
-    `).join('');
+    `;
+    }).join('');
   }
 
   async function runTrackingAnalysis(rawText) {

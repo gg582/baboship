@@ -509,6 +509,14 @@ static void root_handler(cwist_http_request *req, cwist_http_response *res) {
         context,
         "hero_body",
         "실시간 항로 지표와 통제된 규제를 결합해, 배송 최단 시간 경로를 한 화면에서 설계하세요.");
+    const char *tracker_api_base = getenv("TRACKER_API_BASE");
+    if (!tracker_api_base || tracker_api_base[0] == '\0') {
+        tracker_api_base = "https://apis.tracker.delivery";
+    }
+    const char *tracker_api_key = getenv("TRACKER_API_KEY");
+    if (!tracker_api_key) tracker_api_key = "";
+    cJSON_AddStringToObject(context, "tracker_api_base", tracker_api_base);
+    cJSON_AddStringToObject(context, "tracker_api_key", tracker_api_key);
 
     cwist_sstring *rendered = cwist_template_render_file("templates/index.html.tmpl", context);
     cJSON_Delete(context);
