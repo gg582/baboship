@@ -87,6 +87,7 @@ static const location_alias_t g_aliases[] = {
     {"INCHON", "ICN"},
     {"SEOUL", "ICN"},
     {"GIMPO", "GMP"},
+    {"DAEGU", "TAE"},
     {"LOSANGELES", "LAX"},
     {"LOS-ANGELES", "LAX"},
     {"FRANKFURT", "FRA"},

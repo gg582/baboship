@@ -229,6 +229,36 @@ const LOCATION_HINTS = [
   { pattern: /(PUDONG|PVG|상하이|SHANGHAI)/i, alias: 'PUDONG' }
 ];
 
+// Derived from OpenStreetMap facility names for Korea Post distribution centers.
+const KOREA_POST_FACILITY_HINTS = [
+  {
+    alias: 'INCHEON',
+    patterns: [
+      /국제우편물류센터/,
+      /국제우편\s*물류/,
+      /인천국제우편/,
+      /international\s+mail\s+logistics\s+center/i
+    ]
+  },
+  {
+    alias: 'SEOUL',
+    patterns: [
+      /서울국제/,
+      /서울교환/,
+      /서울국제우편/
+    ]
+  },
+  {
+    alias: 'DAEGU',
+    patterns: [
+      /대구우편/,
+      /대구고성동/,
+      /대구/,
+      /daegu/i
+    ]
+  }
+];
+
 document.addEventListener('DOMContentLoaded', () => {
   const mainCanvas = document.getElementById('route-map');
   const loader = document.getElementById('map-loader');
@@ -514,10 +544,22 @@ document.addEventListener('DOMContentLoaded', () => {
     if (statWorkers) statWorkers.textContent = '로컬 모드';
   }
 
+  function matchKoreaPostFacility(candidate) {
+    if (!candidate) return '';
+    for (const hint of KOREA_POST_FACILITY_HINTS) {
+      if (hint.patterns.some((pattern) => pattern.test(candidate))) {
+        return hint.alias;
+      }
+    }
+    return '';
+  }
+
   function normalizeTrackingLocation(name, code, isoCode) {
     const normalizedIso = (isoCode || '').trim().toUpperCase();
     const candidates = [code, name, normalizedIso].filter(Boolean);
     for (const candidate of candidates) {
+      const facilityAlias = matchKoreaPostFacility(candidate);
+      if (facilityAlias) return facilityAlias;
       for (const hint of LOCATION_HINTS) {
         if (hint.pattern.test(candidate)) return hint.alias;
       }

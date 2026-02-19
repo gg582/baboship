@@ -48,3 +48,10 @@
 - **최대 5회 환승** 경로 탐색
 - **WebAssembly** 기반 클라이언트 사이드 연산
 - **100% 오프라인** 지원 (Service Worker)
+
+## 환경 변수
+
+정적 템플릿을 렌더링할 때 몇 가지 환경 변수를 참조합니다.
+
+- `TRACKER_API_BASE`: 우체국 API 프록시 엔드포인트 (기본값 `https://apis.tracker.delivery`)
+- `TRACKER_API_KEY`: Tracker Delivery API 키
