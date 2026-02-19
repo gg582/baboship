@@ -6,6 +6,8 @@
 #include <ctype.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/types.h>
+#include <stdint.h>
 
 #include <cwist/sys/app/app.h>
 #include <cwist/core/sstring/sstring.h>
@@ -16,6 +18,7 @@
 #include <sqlite3.h>
 
 #include "nuke_flight.h"
+#include "logistics_engine.h"
 
 typedef struct {
     nuke_flight_store_t store;
@@ -40,6 +43,14 @@ typedef struct {
     char reason[160];
 } logistics_block_rule_t;
 
+static char *dup_string(const char *src) {
+    if (!src) return NULL;
+    size_t len = strlen(src) + 1;
+    char *copy = malloc(len);
+    if (copy) memcpy(copy, src, len);
+    return copy;
+}
+
 static nuke_server_state_t g_state = {0};
 static cwist_app *g_app = NULL;
 static bool g_cleaned = false;
@@ -47,6 +58,10 @@ static logistics_best_node_t *g_best_nodes = NULL;
 static size_t g_best_node_count = 0;
 static logistics_block_rule_t *g_block_rules = NULL;
 static size_t g_block_rule_count = 0;
+
+const nuke_flight_store_t* logistics_native_get_store(void) {
+    return &g_state.store;
+}
 
 static void cleanup(void) {
     if (g_cleaned) return;
@@ -361,6 +376,27 @@ static bool normalize_iata_code(const char *input, char output[4]) {
     return true;
 }
 
+static ssize_t lookup_airport_index(const char code[4]) {
+    if (!code || g_state.store.code_capacity == 0) return -1;
+    uint32_t packed = ((uint32_t)(unsigned char)code[0] << 24) |
+                      ((uint32_t)(unsigned char)code[1] << 16) |
+                      ((uint32_t)(unsigned char)code[2] << 8) |
+                      (uint32_t)' ';
+    size_t mask = g_state.store.code_capacity - 1;
+    size_t slot = (packed * 2654435761u) & mask;
+    for (size_t attempt = 0; attempt < g_state.store.code_capacity; ++attempt) {
+        uint32_t key = g_state.store.code_keys[slot];
+        if (key == packed) {
+            size_t idx = g_state.store.code_indices[slot];
+            if (idx < g_state.store.airport_count) return (ssize_t)idx;
+            break;
+        }
+        if (key == 0) break;
+        slot = (slot + 1) & mask;
+    }
+    return -1;
+}
+
 static size_t collect_forbidden_countries_for_origin(const char *origin_code,
                                                       const char ***out_countries) {
     if (!origin_code || !out_countries) return 0;
@@ -409,7 +445,7 @@ static size_t collect_forbidden_countries_for_origin(const char *origin_code,
                         }
                         temp_countries = new_temp;
                     }
-                    temp_countries[unique_count] = strdup(country);
+                    temp_countries[unique_count] = dup_string(country);
                     if (!temp_countries[unique_count]) {
                         for (size_t k = 0; k < unique_count; ++k) free(temp_countries[k]);
                         free(temp_countries);
@@ -703,6 +739,70 @@ static void routes_handler(cwist_http_request *req, cwist_http_response *res) {
     }
 }
 
+static void direct_handler(cwist_http_request *req, cwist_http_response *res) {
+    const char *code_param = cwist_query_map_get(req->query_params, "code");
+    char norm[4] = {0};
+    if (!normalize_iata_code(code_param, norm)) {
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddStringToObject(err, "error", "유효한 3자리 공항 코드를 지정하세요.");
+        write_json_response(res, err, CWIST_HTTP_BAD_REQUEST);
+        return;
+    }
+    ssize_t idx = lookup_airport_index(norm);
+    if (idx < 0) {
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddStringToObject(err, "error", "요청한 공항을 찾을 수 없습니다.");
+        write_json_response(res, err, CWIST_HTTP_NOT_FOUND);
+        return;
+    }
+
+    const char **forbidden_countries = NULL;
+    size_t forbidden_count = collect_forbidden_countries_for_origin(norm, &forbidden_countries);
+
+    size_t cnt = g_state.store.route_counts[idx];
+    size_t off = g_state.store.route_offsets[idx];
+    cJSON *root = cJSON_CreateObject();
+    cJSON *arr = cJSON_AddArrayToObject(root, "destinations");
+    for (size_t i = 0; i < cnt; ++i) {
+        size_t dst_idx = g_state.store.adj_dst_indices[off + i];
+        if (dst_idx >= g_state.store.airport_count) continue;
+
+        bool skip = false;
+        if (forbidden_count > 0 && g_state.store.airport_countries) {
+            const char *dst_country = g_state.store.airport_countries[dst_idx];
+            if (dst_country && dst_country[0] != '\0') {
+                for (size_t k = 0; k < forbidden_count; ++k) {
+                    if (strcasecmp(dst_country, forbidden_countries[k]) == 0) {
+                        skip = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (skip) continue;
+
+        cJSON *node = cJSON_CreateObject();
+        cJSON_AddStringToObject(node, "code", g_state.store.airport_codes[dst_idx]);
+        cJSON_AddNumberToObject(node, "lat", g_state.store.airport_lat[dst_idx]);
+        cJSON_AddNumberToObject(node, "lon", g_state.store.airport_lon[dst_idx]);
+        cJSON_AddNumberToObject(node, "distKm", g_state.store.adj_distance[off + i]);
+        cJSON_AddNumberToObject(node, "connections", (double)g_state.store.route_counts[dst_idx]);
+        if (g_state.store.airport_countries) {
+            cJSON_AddStringToObject(node, "country", g_state.store.airport_countries[dst_idx]);
+        }
+        cJSON_AddItemToArray(arr, node);
+    }
+
+    write_json_response(res, root, CWIST_HTTP_OK);
+
+    if (forbidden_countries) {
+        for (size_t i = 0; i < forbidden_count; ++i) {
+            free((void*)forbidden_countries[i]);
+        }
+        free(forbidden_countries);
+    }
+}
+
 static void best_handler(cwist_http_request *req, cwist_http_response *res) {
     (void)req;
     if (!g_best_nodes || g_best_node_count == 0) {
@@ -726,6 +826,50 @@ static void best_handler(cwist_http_request *req, cwist_http_response *res) {
         cJSON_AddStringToObject(entry, "notes", node->notes);
         cJSON_AddItemToArray(items, entry);
     }
+    write_json_response(res, root, CWIST_HTTP_OK);
+}
+
+static void tracking_analyze_handler(cwist_http_request *req, cwist_http_response *res) {
+    if (!req->body || !req->body->data || req->body->data[0] == '\0') {
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddStringToObject(err, "error", "분석할 로그 본문이 필요합니다.");
+        write_json_response(res, err, CWIST_HTTP_BAD_REQUEST);
+        return;
+    }
+    cJSON *input = cJSON_Parse(req->body->data);
+    if (!input) {
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddStringToObject(err, "error", "요청 본문이 유효한 JSON이 아닙니다.");
+        write_json_response(res, err, CWIST_HTTP_BAD_REQUEST);
+        return;
+    }
+    const cJSON *log_node = cJSON_GetObjectItemCaseSensitive(input, "log");
+    const char *payload = (cJSON_IsString(log_node) && log_node->valuestring) ? log_node->valuestring : NULL;
+    if (!payload || payload[0] == '\0') {
+        cJSON_Delete(input);
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddStringToObject(err, "error", "log 필드에 분석 문자열을 넣어주세요.");
+        write_json_response(res, err, CWIST_HTTP_BAD_REQUEST);
+        return;
+    }
+
+    logistics_tracking_result_t result;
+    bool ok = logistics_analyze_tracking(payload, &result);
+    cJSON_Delete(input);
+    if (!ok) {
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddStringToObject(err, "error", "분석 가능한 위치 이벤트가 없습니다.");
+        write_json_response(res, err, CWIST_HTTP_BAD_REQUEST);
+        return;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "nodes", (double)result.node_count);
+    cJSON_AddNumberToObject(root, "directKm", result.direct_km);
+    cJSON_AddNumberToObject(root, "traveledKm", result.traveled_km);
+    cJSON_AddNumberToObject(root, "dwellPenalty", result.dwell_penalty);
+    cJSON_AddNumberToObject(root, "routePenalty", result.route_penalty);
+    cJSON_AddNumberToObject(root, "idiotScore", result.edi_score);
     write_json_response(res, root, CWIST_HTTP_OK);
 }
 
@@ -781,6 +925,8 @@ int main(void) {
     cwist_app_get(g_app, "/routes", routes_handler);
     cwist_app_get(g_app, "/airports", airports_handler);
     cwist_app_get(g_app, "/best", best_handler);
+    cwist_app_get(g_app, "/direct", direct_handler);
+    cwist_app_post(g_app, "/tracking/analyze", tracking_analyze_handler);
     cwist_app_static(g_app, "/docs", "docs");
 
     const char *port_env = getenv("PORT");

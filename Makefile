@@ -1,49 +1,54 @@
 CC = gcc
 EMCC ?= emcc
-CFLAGS += -std=c17 -Wall -Wextra -Wpedantic -O2 -g
-CFLAGS += -Iinclude
-CFLAGS += -pthread
-LDFLAGS += -pthread
-LDLIBS += -lm -ldl -lssl -lcrypto -luriparser -lcjson -lcwist -lttak
-
-WASM_BUILD_DIR := build/wasm
-WASM_DIST_DIR := docs/wasm
-WASM_MODULE := nuke_kernel
-WASM_TARGET := $(WASM_DIST_DIR)/$(WASM_MODULE).js
-
-WASM_SRC := wasm/$(WASM_MODULE).c src/nuke_flight.c
-WASM_EXPORTS := '["_nuke_wasm_init","_nuke_wasm_load_data","_nuke_wasm_gc_distance","_nuke_wasm_route_distance","_nuke_wasm_efficiency","_nuke_wasm_is_valid_iata","_nuke_wasm_get_best_nodes_json","_nuke_wasm_get_airports_json","_nuke_wasm_get_health_json","_nuke_wasm_search_routes_json","_nuke_wasm_calc_score","_nuke_wasm_get_direct_destinations_json","_malloc","_free"]'
-WASM_RUNTIME_METHODS := '["cwrap","ccall","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","HEAPU8","HEAPF64","allocate","intArrayFromString","ALLOC_NORMAL"]'
-WASM_FLAGS := -std=c17 -Wall -Wextra -Wpedantic -O2 -Iinclude -D__EMSCRIPTEN__
-WASM_EMFLAGS := -s MODULARIZE=1 -s EXPORT_ES6=1 -s EXPORT_NAME=\"createNukeKernel\" -s ENVIRONMENT=web,worker -s ALLOW_MEMORY_GROWTH=1 -s NO_EXIT_RUNTIME=1 -s TOTAL_MEMORY=33554432 -s ERROR_ON_UNDEFINED_SYMBOLS=1
 
 CWIST_DIR := lib/cwist
 TTAK_DIR := lib/libttak
 CWIST_LIB := $(CWIST_DIR)/libcwist.a
 TTAK_LIB := $(TTAK_DIR)/lib/libttak.a
 
+CFLAGS += -std=c17 -Wall -Wextra -Wpedantic -O2 -g
+CFLAGS += -Iinclude
+CFLAGS += -I$(CWIST_DIR)/include -I$(TTAK_DIR)/include -I$(CWIST_DIR)/lib/sqlite3
+CFLAGS += -pthread
+
+LDFLAGS += -pthread
+LDFLAGS += -L$(CWIST_DIR) -L$(TTAK_DIR)/lib
+
+LDLIBS += -lcwist -lttak -lssl -lcrypto -luriparser -lcjson -ldl -lm
+
+WASM_BUILD_DIR := build/wasm
+WASM_DIST_DIR := docs/wasm
+WASM_MODULE := nuke_kernel
+WASM_TARGET := $(WASM_DIST_DIR)/$(WASM_MODULE).js
+
+WASM_SRC := wasm/$(WASM_MODULE).c wasm/logistics_engine.c src/nuke_flight.c
+WASM_EXPORTS := '["_nuke_wasm_init","_nuke_wasm_load_data","_nuke_wasm_gc_distance","_nuke_wasm_route_distance","_nuke_wasm_efficiency","_nuke_wasm_is_valid_iata","_nuke_wasm_get_best_nodes_json","_nuke_wasm_get_airports_json","_nuke_wasm_get_health_json","_nuke_wasm_search_routes_json","_nuke_wasm_calc_score","_nuke_wasm_get_direct_destinations_json","_analyze_tracking","_get_idiot_score","_malloc","_free"]'
+WASM_RUNTIME_METHODS := '["cwrap","ccall","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","HEAPU8","HEAPF64","allocate","intArrayFromString","ALLOC_NORMAL"]'
+WASM_FLAGS := -std=c17 -Wall -Wextra -Wpedantic -O2 -Iinclude -D__EMSCRIPTEN__
+WASM_EMFLAGS := -s MODULARIZE=1 -s EXPORT_ES6=1 -s EXPORT_NAME=\"createNukeKernel\" -s ENVIRONMENT=web,worker -s ALLOW_MEMORY_GROWTH=1 -s NO_EXIT_RUNTIME=1 -s TOTAL_MEMORY=33554432 -s ERROR_ON_UNDEFINED_SYMBOLS=1
+
 APP := nukedb_app
 SRC := src/nuke_flight.c src/server.c
-OBJ := $(SRC:src/%.c=build/%.o)
+LOGISTICS_SRC := wasm/logistics_engine.c
+OBJ := $(SRC:src/%.c=build/%.o) build/logistics_engine.o
 
-.PHONY: all clean run deps sample-data wasm wasm_clean
+.PHONY: all clean run sample-data wasm wasm_clean
 
 all: $(APP)
-
-$(APP): deps $(OBJ)
-	$(CC) $(CFLAGS) -o $@ $(OBJ) $(CWIST_LIB) $(TTAK_LIB) $(LDFLAGS) $(LDLIBS)
-
-deps: $(CWIST_LIB) $(TTAK_LIB)
-
-$(CWIST_LIB):
-	$(MAKE) -C $(CWIST_DIR) CC=$(CC)
-
-$(TTAK_LIB):
-	$(MAKE) -C $(TTAK_DIR) CC=$(CC)
 
 build/%.o: src/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+build/logistics_engine.o: $(LOGISTICS_SRC)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(APP): $(OBJ) $(CWIST_LIB)
+	$(CC) $(LDFLAGS) $(OBJ) -o $@ $(LDLIBS)
+
+$(CWIST_LIB):
+	$(MAKE) -C $(CWIST_DIR) LIBTTAK_DIR=../libttak
 
 run: $(APP)
 	./$(APP)

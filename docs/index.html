@@ -10,11 +10,58 @@
     <link rel="stylesheet" href="app.css">
 </head>
 <body class="app-shell">
-    <main class="layout">
-        <section class="card hero-card">
-            <div class="pill">Global Freight Control</div>
-            <h1>바보쉽 라우트 콘솔</h1>
-            <p>실시간 항로 지표와 통제된 규제를 결합해, 배송 최단 시간 경로를 한 화면에서 설계하세요.</p>
+    <div class="app-container">
+        <header class="app-header">
+            <div class="brand">
+                <strong>바보쉽 물류 콘솔</strong>
+                <p>우체국 송장 추적과 공항 경로 설계를 한 화면에서 전환하세요.</p>
+            </div>
+            <div class="mode-tabs" role="tablist" aria-label="화물 분석 모드">
+                <button type="button" class="mode-tab" data-mode-tab="tracking" role="tab" aria-controls="tracking-panel" aria-selected="false">송장번호로 물류 추적</button>
+                <button type="button" class="mode-tab active" data-mode-tab="manual" role="tab" aria-controls="manual-panel" aria-selected="true">수동으로 공항 선택</button>
+            </div>
+        </header>
+
+        <section class="panel hidden tracking-panel" id="tracking-panel" data-panel="tracking">
+            <div class="card tracking-card">
+                <div class="tracking-header">
+                    <div>
+                        <div class="pill soft">우체국 EMS 베타</div>
+                        <h2>송장번호로 물류 추적</h2>
+                        <p>송장 번호를 입력하면 한국 우체국 EMS 이벤트를 불러와 WebAssembly 엔진으로 경로 효율을 계산합니다.</p>
+                    </div>
+                    <div class="tracking-actions">
+                        <label>
+                            <span>송장번호</span>
+                            <input type="text" id="tracking-number" placeholder="예: EG123456789KR" autocomplete="off">
+                        </label>
+                        <button type="button" id="tracking-fetch-btn">우체국에서 불러오기</button>
+                    </div>
+                </div>
+                <div class="tracking-body">
+                    <label class="log-input">
+                        <span>이벤트 원문 (직접 붙여넣기 가능)</span>
+                        <textarea id="tracking-log-input" rows="5" placeholder="API 응답 JSON이나 텍스트 로그를 붙여넣으면 자동으로 분석됩니다."></textarea>
+                    </label>
+                    <div class="tracking-body-actions">
+                        <button type="button" id="tracking-analyze-btn">경로 분석</button>
+                        <div class="tracking-status" id="tracking-status">송장번호를 입력하거나 이벤트 문자열을 붙여넣으세요.</div>
+                    </div>
+                </div>
+                <div class="tracking-metrics" id="tracking-metrics">
+                    <div class="empty-state">분석 결과가 여기에 표시됩니다.</div>
+                </div>
+                <div class="tracking-timeline" id="tracking-timeline">
+                    <div class="empty-state">우체국 이벤트를 불러오면 경로가 시간순으로 나타납니다.</div>
+                </div>
+            </div>
+        </section>
+
+        <main class="layout panel manual-panel" id="manual-panel" data-panel="manual">
+            <section class="card hero-card">
+                <div class="pill">Global Freight Control</div>
+                <h1>바보쉽 라우트 콘솔</h1>
+                <p>실시간 항로 지표와 통제된 규제를 결합해, 배송 최단 시간 경로를 한 화면에서 설계하세요.</p>
             <div class="stat-grid">
                 <div class="stat">
                     <div class="label">공항 수</div>
@@ -46,7 +93,7 @@
                     </label>
                     <label>
                         <span>최대 환승 횟수</span>
-                        <input type="number" min="0" max="5" value="2" id="max-transfers">
+                        <input type="number" min="0" max="3" value="2" id="max-transfers">
                     </label>
                     <label>
                         <span>표시할 경로 수</span>
@@ -125,7 +172,8 @@
             </div>
             <div id="best-to-results"><div class="empty-state">아직 최적 경로를 검색하지 않았습니다. 버튼을 눌러서 검색하세요.</div></div>
         </section>
-    </main>
+        </main>
+    </div>
     <div id="map-modal" class="map-modal" aria-hidden="true">
         <div class="map-modal-content">
             <button type="button" class="map-modal-close" id="map-modal-close" aria-label="크게보기 닫기">X</button>

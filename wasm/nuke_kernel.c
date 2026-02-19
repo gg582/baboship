@@ -96,6 +96,11 @@ int nuke_wasm_load_data(const void *blob, size_t size) {
     return nuke_store_load_from_blob(&g_store, blob, size);
 }
 
+const nuke_flight_store_t* nuke_wasm_get_store(void) {
+    if (!g_initialized) return NULL;
+    return &g_store;
+}
+
 WASM_KEEPALIVE
 const char* nuke_wasm_get_airports_json(void) {
     if (!g_initialized || g_store.airport_count == 0) return "{\"airports\":[]}";

@@ -16,6 +16,8 @@
  */
 
 let kernel = null;
+const assetBase = new URL('./', self.location.href);
+const resolveAsset = (path) => new URL(path, assetBase).href;
 
 function getContinent(lat, lon) {
   if (lat >= 7 && lat <= 84 && lon >= -170 && lon <= -50) return '북미';
@@ -58,9 +60,9 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 }
 
 async function initKernel() {
-  const { default: createNukeKernel } = await import('./wasm/nuke_kernel.js');
+  const { default: createNukeKernel } = await import(resolveAsset('wasm/nuke_kernel.js'));
   kernel = await createNukeKernel({
-    locateFile: (path) => `./wasm/${path}`
+    locateFile: (path) => resolveAsset(`wasm/${path}`)
   });
 
   kernel.initStore = kernel.cwrap('nuke_wasm_init', 'number', []);
@@ -70,7 +72,7 @@ async function initKernel() {
 
   kernel.initStore();
 
-  const response = await fetch('./wasm/nuke_blob.bin');
+  const response = await fetch(resolveAsset('wasm/nuke_blob.bin'));
   if (!response.ok) throw new Error('Failed to fetch data blob');
   const buf = await response.arrayBuffer();
   const u8 = new Uint8Array(buf);

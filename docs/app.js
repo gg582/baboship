@@ -8,8 +8,98 @@ const state = {
   kernel: null,
   bestWorker: null,
   bestRequestId: 0,
-  isMobile: false
+  isMobile: false,
+  uiMode: 'manual',
+  trackingEvents: [],
+  wasmUnavailableReason: '',
+  nativeMode: false,
+  nativeHealth: null,
+  nativeDirectCache: new Map()
 };
+
+function getWasmUnavailableMessage(fallback = 'WASM 커널이 아직 초기화되지 않았습니다.') {
+  return state.wasmUnavailableReason || fallback;
+}
+
+function resolveAssetBase() {
+  const current = document.currentScript || (() => {
+    const scripts = document.getElementsByTagName('script');
+    return scripts[scripts.length - 1];
+  })();
+  if (current && current.src) {
+    return new URL('.', current.src);
+  }
+  return new URL('./', window.location.href);
+}
+
+const ASSET_BASE = resolveAssetBase();
+const resolveAsset = (path) => new URL(path, ASSET_BASE).href;
+
+const assetPaths = {
+  wasmModule: resolveAsset('wasm/nuke_kernel.js'),
+  wasmBlob: resolveAsset('wasm/nuke_blob.bin'),
+  workerScript: resolveAsset('best-worker.js'),
+  airportsJson: resolveAsset('airports.json'),
+  serviceWorker: resolveAsset('sw.js')
+};
+
+const TRACKER_DELIVERY_API = 'https://apis.tracker.delivery';
+
+function clampNumber(value, min, max) {
+  const num = Number(value);
+  if (Number.isNaN(num)) return min;
+  if (typeof min === 'number' && num < min) return min;
+  if (typeof max === 'number' && num > max) return max;
+  return num;
+}
+
+async function fetchJsonOrError(url, options = {}) {
+  const response = await fetch(url, options);
+  const raw = await response.text();
+  let parsed = null;
+  if (raw) {
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      if (response.ok) {
+        throw new Error('JSON 파싱 실패');
+      }
+    }
+  }
+  if (!response.ok) {
+    const detail = (parsed && parsed.error) || (raw ? raw.trim() : '');
+    throw new Error(detail || `HTTP ${response.status}`);
+  }
+  return parsed ?? {};
+}
+
+async function fetchNativeRoutes(from, to, maxTransfers, maxResults) {
+  const params = new URLSearchParams({
+    from,
+    to,
+    maxTransfers: String(maxTransfers),
+    maxResults: String(maxResults || 10)
+  });
+  return fetchJsonOrError(`./routes?${params.toString()}`);
+}
+
+async function fetchNativeDirectDestinations(code) {
+  if (state.nativeDirectCache.has(code)) {
+    return state.nativeDirectCache.get(code);
+  }
+  const params = new URLSearchParams({ code });
+  const data = await fetchJsonOrError(`./direct?${params.toString()}`);
+  state.nativeDirectCache.set(code, data);
+  return data;
+}
+
+async function analyzeTrackingNative(payload) {
+  return fetchJsonOrError('./tracking/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ log: payload })
+  });
+}
 
 // Mobile device detection
 function detectMobile() {
@@ -28,11 +118,21 @@ function detectMobile() {
 
 // WASM Module Loader
 async function initWasm() {
+  if (typeof WebAssembly === 'undefined') {
+    state.kernel = null;
+    state.wasmUnavailableReason = '이 브라우저는 WebAssembly를 지원하지 않습니다.';
+    return false;
+  }
+  if (window.location.protocol === 'file:') {
+    state.kernel = null;
+    state.wasmUnavailableReason = '파일 시스템에서 직접 열면 WASM 모듈을 로드할 수 없습니다. python -m http.server 등으로 서빙하거나 Pages 빌드를 사용하세요.';
+    return false;
+  }
   try {
-    const { default: createNukeKernel } = await import('./wasm/nuke_kernel.js');
+    const { default: createNukeKernel } = await import(assetPaths.wasmModule);
     console.log('Creating WASM Kernel...');
     state.kernel = await createNukeKernel({
-      locateFile: (path) => `./wasm/${path}`
+      locateFile: (path) => resolveAsset(`wasm/${path}`)
     });
     
     if (!state.kernel.cwrap) {
@@ -49,6 +149,7 @@ async function initWasm() {
     state.kernel.searchRoutes = state.kernel.cwrap('nuke_wasm_search_routes_json', 'string', ['string', 'string', 'number']);
     state.kernel.calcScore = state.kernel.cwrap('nuke_wasm_calc_score', 'number', ['number', 'number', 'number', 'number', 'number']);
     state.kernel.getDirectDests = state.kernel.cwrap('nuke_wasm_get_direct_destinations_json', 'string', ['string']);
+    state.kernel.analyzeTracking = state.kernel.cwrap('analyze_tracking', 'string', ['string']);
 
     // cwrap returns the raw function for numeric-only signatures; fall back to
     // the underscore-prefixed direct export when the symbol is present but
@@ -60,11 +161,14 @@ async function initWasm() {
         throw new Error('initStore is not a function - symbol might be missing in WASM exports');
       }
     }
+    if (typeof state.kernel.analyzeTracking !== 'function' && typeof state.kernel._analyze_tracking === 'function') {
+      state.kernel.analyzeTracking = state.kernel._analyze_tracking;
+    }
 
     state.kernel.initStore();
 
     // Load main routes/graph blob
-    const response = await fetch('./wasm/nuke_blob.bin');
+    const response = await fetch(assetPaths.wasmBlob);
     if (!response.ok) throw new Error('Failed to fetch data blob');
     const blobArrayBuffer = await response.arrayBuffer();
     const uint8Array = new Uint8Array(blobArrayBuffer);
@@ -82,19 +186,20 @@ async function initWasm() {
     }
     
     console.log('WASM Kernel initialized successfully');
+    state.wasmUnavailableReason = '';
+    return true;
   } catch (err) {
     console.error('WASM Kernel failed to load:', err);
     state.kernel = null;
+    state.wasmUnavailableReason = 'WASM 커널 초기화 실패: ' + (err?.message || err);
+    return false;
   }
 }
 
 async function initServiceWorker() {
   if ('serviceWorker' in navigator) {
     try {
-      await navigator.serviceWorker.register('./sw.js', {
-        scope: './',
-        type: 'module'
-      });
+      await navigator.serviceWorker.register(assetPaths.serviceWorker, { type: 'module' });
       // Wait for SW to be active and controlling this page
       await navigator.serviceWorker.ready;
       console.log('Service Worker ready at scope:', navigator.serviceWorker.controller?.scriptURL);
@@ -110,6 +215,16 @@ const continentShapes = [
   [[-10,70],[40,70],[90,60],[120,60],[140,50],[160,45],[170,60],[180,75],[180,25],[150,20],[120,20],[90,10],[60,5],[40,-10],[20,-20],[0,-25],[-10,0],[-5,20]],
   [[-20,35],[10,35],[25,32],[35,20],[30,5],[25,-10],[20,-25],[15,-35],[0,-30],[-10,-5]],
   [[110,-10],[125,-25],[140,-35],[150,-35],[155,-25],[150,-15],[135,-10],[120,-15]]
+];
+
+const LOCATION_HINTS = [
+  { pattern: /(INCHEON|ICN|인천)/i, alias: 'INCHEON' },
+  { pattern: /(SEOUL|성남|김포|GMP)/i, alias: 'SEOUL' },
+  { pattern: /(LOS.?ANGELES|LAX|엘에이)/i, alias: 'LOSANGELES' },
+  { pattern: /(FRANKFURT|FRA|프랑크)/i, alias: 'FRANKFURT' },
+  { pattern: /(HONG.?KONG|HKG|홍콩)/i, alias: 'HONGKONG' },
+  { pattern: /(SINGAPORE|SIN|싱가포르)/i, alias: 'SINGAPORE' },
+  { pattern: /(PUDONG|PVG|상하이|SHANGHAI)/i, alias: 'PUDONG' }
 ];
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -128,7 +243,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const selectionTo = document.getElementById('selection-to');
   const swapBtn = document.getElementById('swap-btn');
   const searchBtn = document.getElementById('search-btn');
-  const modeButtons = document.querySelectorAll('.map-mode button');
+  const modeTabs = document.querySelectorAll('[data-mode-tab]');
+  const manualPanel = document.querySelector('[data-panel="manual"]');
+  const trackingPanel = document.querySelector('[data-panel="tracking"]');
+  const mapModeButtons = document.querySelectorAll('.map-mode button');
   const bestFromTitle = document.getElementById('best-from-title');
   const bestToTitle = document.getElementById('best-to-title');
   const bestFromResults = document.getElementById('best-from-results');
@@ -140,6 +258,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const mapModal = document.getElementById('map-modal');
   const modalCanvas = document.getElementById('route-map-large');
   const modalCloseBtn = document.getElementById('map-modal-close');
+  const trackingNumberInput = document.getElementById('tracking-number');
+  const trackingFetchBtn = document.getElementById('tracking-fetch-btn');
+  const trackingLogInput = document.getElementById('tracking-log-input');
+  const trackingAnalyzeBtn = document.getElementById('tracking-analyze-btn');
+  const trackingStatus = document.getElementById('tracking-status');
+  const trackingMetrics = document.getElementById('tracking-metrics');
+  const trackingTimeline = document.getElementById('tracking-timeline');
 
   const projectPoint = (lon, lat) => {
     const u = (lon + 180) / 360;
@@ -295,20 +420,22 @@ document.addEventListener('DOMContentLoaded', () => {
     loader.textContent = '공항 데이터를 불러오는 중...';
     try {
       let data;
-      // Try SW-intercepted endpoint first; fall back to direct JSON file
-      // when the service worker is not yet controlling this page (first visit).
-      const swControlling = !!navigator.serviceWorker?.controller;
-      if (swControlling) {
-        const response = await fetch('./airports?limit=8192');
-        if (response.ok) {
-          const ct = response.headers.get('content-type') || '';
-          if (ct.includes('application/json')) {
-            data = await response.json();
+      if (state.nativeMode) {
+        data = await fetchJsonOrError('./airports?limit=8192');
+      } else {
+        // Try SW-intercepted endpoint first; fall back to direct JSON file
+        // when the service worker is not yet controlling this page (first visit).
+        const swControlling = !!navigator.serviceWorker?.controller;
+        if (swControlling) {
+          try {
+            data = await fetchJsonOrError('./airports?limit=8192');
+          } catch {
+            data = null;
           }
         }
       }
-      if (!data) {
-        const response = await fetch('./airports.json');
+      if (!data || !Array.isArray(data.airports)) {
+        const response = await fetch(assetPaths.airportsJson);
         if (!response.ok) throw new Error('공항 데이터를 불러오지 못했습니다.');
         const allAirports = await response.json();
         data = { airports: allAirports.slice(0, 8192) };
@@ -324,24 +451,395 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function searchRoutes() {
-    const from = fromInput.value.trim().toUpperCase(), to = toInput.value.trim().toUpperCase();
-    const maxT = parseInt(transfersInput.value) || 0;
-    if (from.length !== 3 || to.length !== 3) return;
-    if (!state.kernel) { statusEl.textContent = 'WASM 커널이 로드되지 않았습니다.'; return; }
-    statusEl.textContent = 'WASM 분석 중...';
+  function setActivePanel(mode) {
+    state.uiMode = mode;
+    modeTabs.forEach(tab => {
+      const isActive = tab.dataset.modeTab === mode;
+      tab.classList.toggle('active', isActive);
+      tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    });
+    if (manualPanel) manualPanel.classList.toggle('hidden', mode !== 'manual');
+    if (trackingPanel) trackingPanel.classList.toggle('hidden', mode !== 'tracking');
+  }
+
+  function setTrackingStatus(message, variant = 'info') {
+    if (!trackingStatus) return;
+    trackingStatus.textContent = message;
+    trackingStatus.classList.remove('error', 'success');
+    if (variant === 'error') trackingStatus.classList.add('error');
+    if (variant === 'success') trackingStatus.classList.add('success');
+  }
+
+  async function enableNativeMode() {
     try {
-      const data = JSON.parse(state.kernel.searchRoutes(from, to, maxT));
-      state.routes = data.paths || [];
-      resultsEl.innerHTML = state.routes.map((p, i) => `
+      const data = await fetchJsonOrError('./health');
+      state.nativeMode = true;
+      state.nativeHealth = data;
+      state.wasmUnavailableReason = '';
+      if (typeof data.airports_loaded === 'number' && statAirports) {
+        statAirports.textContent = data.airports_loaded.toLocaleString();
+      }
+      if (typeof data.routes_loaded === 'number' && statRoutes) {
+        statRoutes.textContent = data.routes_loaded.toLocaleString();
+      }
+      if (typeof data.worker_threads === 'number' && statWorkers) {
+        statWorkers.textContent = `Native C (${data.worker_threads})`;
+      } else if (statWorkers) {
+        statWorkers.textContent = 'Native C 엔진';
+      }
+      return true;
+    } catch (err) {
+      console.warn('Native fallback unavailable:', err);
+      return false;
+    }
+  }
+
+  function applyWasmDisabledUi(messageOverride) {
+    if (state.nativeMode) return;
+    const reason = messageOverride || getWasmUnavailableMessage('이 환경에서는 WASM 기능을 사용할 수 없습니다.');
+    const controls = [searchBtn, trackingAnalyzeBtn, bestFromRefreshBtn, bestToRefreshBtn];
+    controls.forEach((btn) => {
+      if (!btn) return;
+      btn.disabled = true;
+      btn.title = reason;
+      btn.classList.add('disabled');
+    });
+    if (resultsEl) resultsEl.innerHTML = `<div class="empty-state">${reason}</div>`;
+    if (bestFromResults) bestFromResults.innerHTML = `<div class="empty-state">${reason}</div>`;
+    if (bestToResults) bestToResults.innerHTML = `<div class="empty-state">${reason}</div>`;
+    if (trackingMetrics) trackingMetrics.innerHTML = `<div class="empty-state">${reason}</div>`;
+    if (trackingStatus) setTrackingStatus(reason, 'error');
+    if (statWorkers) statWorkers.textContent = '로컬 모드';
+  }
+
+  function normalizeTrackingLocation(name, code) {
+    const candidates = [code, name].filter(Boolean);
+    for (const candidate of candidates) {
+      for (const hint of LOCATION_HINTS) {
+        if (hint.pattern.test(candidate)) return hint.alias;
+      }
+      const cleaned = candidate.replace(/[^A-Za-z]/g, '').toUpperCase();
+      if (cleaned.length >= 6) return cleaned.slice(0, 6);
+      if (cleaned.length === 3) return cleaned;
+    }
+    return '';
+  }
+
+  const DEFAULT_TRACKING_TZ_OFFSET_MINUTES = 9 * 60; // Korea Post uses KST (UTC+9) for compact timestamps
+
+  function parseCompactTimestamp(value, offsetMinutes = DEFAULT_TRACKING_TZ_OFFSET_MINUTES) {
+    if (value === null || value === undefined) return null;
+    const digits = String(value).trim().replace(/\D/g, '');
+    if (digits.length !== 12 && digits.length !== 14) return null;
+    const year = parseInt(digits.slice(0, 4), 10);
+    const month = parseInt(digits.slice(4, 6), 10);
+    const day = parseInt(digits.slice(6, 8), 10);
+    const hour = parseInt(digits.slice(8, 10), 10);
+    const minute = parseInt(digits.slice(10, 12), 10);
+    const second = digits.length === 14 ? parseInt(digits.slice(12, 14), 10) : 0;
+    if ([year, month, day, hour, minute, second].some((n) => Number.isNaN(n))) return null;
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const base = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+    if (Number.isNaN(base.getTime())) return null;
+    if (typeof offsetMinutes === 'number' && Number.isFinite(offsetMinutes)) {
+      base.setUTCMinutes(base.getUTCMinutes() - offsetMinutes);
+    }
+    return base;
+  }
+
+  function parseDateCandidate(value) {
+    if (value === null || value === undefined) return null;
+    if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      const date = new Date(value);
+      if (!Number.isNaN(date.getTime())) return date;
+    }
+    const direct = new Date(value);
+    if (!Number.isNaN(direct.getTime())) return direct;
+    return parseCompactTimestamp(value);
+  }
+
+  function resolveKoreaPostCarriers(invoice) {
+    const normalized = (invoice || '').trim().toUpperCase();
+    const carriers = [];
+    const pushUnique = (id, label) => {
+      if (!carriers.some(entry => entry.id === id)) {
+        carriers.push({ id, label });
+      }
+    };
+    const intlPattern = /^[A-Z]{2}\d{9}[A-Z]{2}$/;
+    const domesticPattern = /^\d{13}$/;
+    if (intlPattern.test(normalized)) {
+      pushUnique('kr.epost.ems', 'Korea Post EMS');
+      pushUnique('kr.epost', 'Korea Post');
+      pushUnique('un.upu.ems', 'UPU EMS (fallback)');
+    } else if (domesticPattern.test(normalized) || normalized.startsWith('KR')) {
+      pushUnique('kr.epost', 'Korea Post');
+      pushUnique('kr.epost.ems', 'Korea Post EMS');
+    } else {
+      pushUnique('kr.epost.ems', 'Korea Post EMS');
+      pushUnique('kr.epost', 'Korea Post');
+    }
+    return carriers;
+  }
+
+  function getEventDate(progress) {
+    const candidates = [
+      progress?.time,
+      progress?.timeUtc,
+      progress?.timeKst,
+      progress?.timestamp,
+      progress?.date,
+      progress?.registerDate
+    ];
+    for (const raw of candidates) {
+      const parsed = parseDateCandidate(raw);
+      if (parsed) return parsed;
+    }
+    if (progress?.date && progress?.time) {
+      const combined = parseDateCandidate(`${progress.date} ${progress.time}`);
+      if (combined) return combined;
+    }
+    return null;
+  }
+
+  function formatTimelineTime(date) {
+    if (!(date instanceof Date)) return '--';
+    const pad = (val) => String(val).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+
+  function formatTimestampToken(date) {
+    if (!(date instanceof Date)) return '';
+    const pad = (val) => String(val).padStart(2, '0');
+    return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}`;
+  }
+
+  function enrichTrackingEvents(rawEvents) {
+    if (!Array.isArray(rawEvents)) return [];
+    return rawEvents.map(progress => {
+      const location = progress?.location?.name || progress?.location?.display || progress?.location || progress?.officeName || '';
+      const code = progress?.location?.code || progress?.code || '';
+      const alias = normalizeTrackingLocation(location, code);
+      const date = getEventDate(progress);
+      const token = formatTimestampToken(date);
+      if (!alias || !token) return null;
+      return {
+        alias,
+        locationName: location || alias,
+        statusText: progress?.status?.text || progress?.description || progress?.message || '',
+        statusCode: progress?.status?.code || '',
+        timestampToken: token,
+        displayTime: formatTimelineTime(date),
+        raw: progress
+      };
+    }).filter(Boolean);
+  }
+
+  async function fetchTrackingEvents(invoice, candidateOverride) {
+    const candidates = Array.isArray(candidateOverride) && candidateOverride.length
+      ? candidateOverride
+      : resolveKoreaPostCarriers(invoice);
+    const attemptErrors = [];
+    for (const carrier of candidates) {
+      const endpoint = `${TRACKER_DELIVERY_API}/carriers/${carrier.id}/tracks/${encodeURIComponent(invoice)}`;
+      try {
+        const response = await fetch(endpoint, {
+          headers: { 'Accept': 'application/json' },
+          mode: 'cors'
+        });
+        const rawBody = await response.text();
+        if (!response.ok) {
+          let detail = '';
+          try {
+            const parsed = rawBody ? JSON.parse(rawBody) : null;
+            detail = parsed?.message || '';
+          } catch (_) {
+            detail = rawBody?.trim();
+          }
+          throw new Error(detail ? `HTTP ${response.status} ${detail}` : `HTTP ${response.status}`);
+        }
+        let data = {};
+        try {
+          data = rawBody ? JSON.parse(rawBody) : {};
+        } catch (err) {
+          throw new Error('JSON 파싱 실패');
+        }
+        const progresses = Array.isArray(data?.progresses) ? data.progresses : [];
+        if (!progresses.length) {
+          throw new Error('진행 이벤트가 비어 있습니다.');
+        }
+        return progresses;
+      } catch (err) {
+        attemptErrors.push(`${carrier.label}: ${err.message}`);
+      }
+    }
+    const joined = attemptErrors.length ? attemptErrors.join(' / ') : '알 수 없는 오류';
+    throw new Error(`우체국 API에 연결하지 못했습니다. ${joined} · 로그를 직접 붙여넣을 수 있습니다.`);
+  }
+
+  function buildTrackingPayload(events) {
+    if (!events.length) return '';
+    return events.map(evt => `${evt.alias} ${evt.timestampToken} ${evt.statusText || ''}`.trim()).join('\n');
+  }
+
+  function renderTrackingMetrics(result) {
+    if (!trackingMetrics) return;
+    if (!result || typeof result !== 'object') {
+      trackingMetrics.innerHTML = '<div class="empty-state">분석 결과가 없습니다.</div>';
+      return;
+    }
+    const formatPercent = (value) => (value * 100).toFixed(1) + '%';
+    trackingMetrics.innerHTML = `
+      <div class="metric">
+        <span>경유 노드</span>
+        <strong>${result.nodes ?? '--'}</strong>
+      </div>
+      <div class="metric">
+        <span>직선 거리</span>
+        <strong>${result.directKm?.toFixed ? result.directKm.toFixed(1) + ' km' : '--'}</strong>
+      </div>
+      <div class="metric">
+        <span>실제 이동</span>
+        <strong>${result.traveledKm?.toFixed ? result.traveledKm.toFixed(1) + ' km' : '--'}</strong>
+      </div>
+      <div class="metric">
+        <span>경로 페널티</span>
+        <strong>${result.routePenalty !== undefined ? formatPercent(result.routePenalty) : '--'}</strong>
+      </div>
+      <div class="metric">
+        <span>대기 페널티</span>
+        <strong>${result.dwellPenalty !== undefined ? formatPercent(result.dwellPenalty) : '--'}</strong>
+      </div>
+      <div class="metric">
+        <span>EDI 스코어</span>
+        <strong>${result.idiotScore !== undefined ? result.idiotScore.toFixed(1) : '--'}</strong>
+      </div>
+    `;
+  }
+
+  function renderTrackingTimeline(events) {
+    if (!trackingTimeline) return;
+    if (!events.length) {
+      trackingTimeline.innerHTML = '<div class="empty-state">우체국 이벤트가 없습니다.</div>';
+      return;
+    }
+    trackingTimeline.innerHTML = events.map(evt => `
+      <div class="timeline-item">
+        <div class="timeline-time">${evt.displayTime}</div>
+        <div class="timeline-details">
+          <strong>${evt.locationName}</strong>
+          <span>${evt.statusText || ''}</span>
+          <span class="tag">${evt.alias}</span>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  async function runTrackingAnalysis(rawText) {
+    if (!trackingLogInput || !trackingStatus) return;
+    const payload = (rawText || '').trim();
+    if (!payload) {
+      setTrackingStatus('분석할 이벤트 문자열이 없습니다.', 'error');
+      return;
+    }
+    if (state.kernel && typeof state.kernel.analyzeTracking === 'function') {
+      try {
+        const result = JSON.parse(state.kernel.analyzeTracking(payload));
+        renderTrackingMetrics(result);
+        setTrackingStatus(`분석 완료: EDI ${result.idiotScore?.toFixed ? result.idiotScore.toFixed(1) : '--'}`, 'success');
+      } catch (err) {
+        setTrackingStatus('분석 실패: ' + err.message, 'error');
+      }
+      return;
+    }
+    if (state.nativeMode) {
+      try {
+        setTrackingStatus('서버 분석 중...');
+        const result = await analyzeTrackingNative(payload);
+        renderTrackingMetrics(result);
+        setTrackingStatus(`분석 완료: EDI ${result.idiotScore?.toFixed ? result.idiotScore.toFixed(1) : '--'}`, 'success');
+      } catch (err) {
+        setTrackingStatus('분석 실패: ' + err.message, 'error');
+      }
+      return;
+    }
+    setTrackingStatus(getWasmUnavailableMessage(), 'error');
+  }
+
+  async function handleTrackingFetch() {
+    if (!trackingNumberInput) return;
+    const invoice = trackingNumberInput.value.trim();
+    if (!invoice) {
+      setTrackingStatus('송장번호를 입력하세요.', 'error');
+      trackingNumberInput.focus();
+      return;
+    }
+    const carriers = resolveKoreaPostCarriers(invoice);
+    const carrierLabels = carriers.map(c => c.label).join(', ');
+    setTrackingStatus(`한국 우체국 (${carrierLabels})에서 조회 중...`);
+    try {
+      const rawEvents = await fetchTrackingEvents(invoice, carriers);
+      const events = enrichTrackingEvents(rawEvents);
+      state.trackingEvents = events;
+      if (!events.length) {
+        setTrackingStatus('파싱 가능한 공항 이벤트를 찾지 못했습니다. 로그를 직접 붙여넣어 주세요.', 'error');
+        renderTrackingTimeline([]);
+        return;
+      }
+      renderTrackingTimeline(events);
+      const payload = buildTrackingPayload(events);
+      if (trackingLogInput) trackingLogInput.value = payload;
+      await runTrackingAnalysis(payload);
+    } catch (err) {
+      setTrackingStatus(err.message || '조회 실패', 'error');
+      renderTrackingTimeline([]);
+    }
+  }
+
+  async function runRouteSearch(from, to, maxTransfers, maxResults) {
+    if (state.kernel) {
+      const data = JSON.parse(state.kernel.searchRoutes(from, to, maxTransfers));
+      if (Array.isArray(data.paths) && maxResults) {
+        data.paths = data.paths.slice(0, maxResults);
+      }
+      return data;
+    }
+    if (state.nativeMode) {
+      return fetchNativeRoutes(from, to, maxTransfers, maxResults || 16);
+    }
+    throw new Error(getWasmUnavailableMessage());
+  }
+
+  async function searchRoutes() {
+    const from = fromInput.value.trim().toUpperCase();
+    const to = toInput.value.trim().toUpperCase();
+    if (from.length !== 3 || to.length !== 3) return;
+    const transfersRaw = transfersInput ? parseInt(transfersInput.value, 10) : 0;
+    const resultsRaw = resultsInput ? parseInt(resultsInput.value, 10) : 8;
+    const maxT = clampNumber(transfersRaw || 0, 0, 5);
+    const maxResults = clampNumber(resultsRaw || 8, 1, 64);
+    if (!state.kernel && !state.nativeMode) {
+      statusEl.textContent = getWasmUnavailableMessage('경로 엔진이 준비되지 않았습니다.');
+      return;
+    }
+    statusEl.textContent = state.kernel ? 'WASM 분석 중...' : '서버 분석 중...';
+    try {
+      const data = await runRouteSearch(from, to, maxT, maxResults);
+      const paths = Array.isArray(data.paths) ? data.paths.slice(0, maxResults) : [];
+      state.routes = paths;
+      resultsEl.innerHTML = paths.length ? paths.map((p, i) => `
         <div class="result-card">
-          <h3>경로 ${i+1}: ${p.airports.map(a => a.code).join(' → ')}</h3>
+          <h3>경로 ${i + 1}: ${p.airports.map(a => a.code).join(' → ')}</h3>
           <p>${p.legs}구간 · ${p.totalDistanceKm.toFixed(1)}km · 효율 ${p.efficiency.toFixed(3)}</p>
         </div>
-      `).join('') || '<div class="empty-state">경로 없음</div>';
-      statusEl.textContent = `분석 완료: ${state.routes.length}개 발견`;
+      `).join('') : '<div class="empty-state">경로 없음</div>';
+      statusEl.textContent = `분석 완료: ${paths.length}개 발견`;
       drawAllScenes();
-    } catch (err) { statusEl.textContent = '오류: ' + err.message; }
+    } catch (err) {
+      statusEl.textContent = '오류: ' + err.message;
+      resultsEl.innerHTML = `<div class="empty-state">${err.message}</div>`;
+    }
   }
 
   function handleCanvasClick(canvas, e) {
@@ -468,8 +966,19 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && mapModal.classList.contains('open')) closeMapModal(); });
 
   swapBtn.addEventListener('click', () => { const f = fromInput.value, t = toInput.value; setInputField('from', t); setInputField('to', f); });
-  modeButtons.forEach(b => b.addEventListener('click', () => { modeButtons.forEach(x => x.classList.remove('active')); b.classList.add('active'); state.activeField = b.dataset.field; }));
-  searchBtn.addEventListener('click', searchRoutes);
+  mapModeButtons.forEach(b => b.addEventListener('click', () => { mapModeButtons.forEach(x => x.classList.remove('active')); b.classList.add('active'); state.activeField = b.dataset.field; }));
+  searchBtn.addEventListener('click', () => { searchRoutes().catch(err => console.error(err)); });
+  modeTabs.forEach(tab => tab.addEventListener('click', () => setActivePanel(tab.dataset.modeTab || 'manual')));
+  if (trackingFetchBtn) trackingFetchBtn.addEventListener('click', () => { handleTrackingFetch().catch(err => console.error(err)); });
+  if (trackingAnalyzeBtn && trackingLogInput) trackingAnalyzeBtn.addEventListener('click', () => { runTrackingAnalysis(trackingLogInput.value).catch(err => console.error(err)); });
+  if (trackingNumberInput) {
+    trackingNumberInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleTrackingFetch();
+      }
+    });
+  }
   window.addEventListener('resize', resizeAllCanvases);
 
   function renderBestDestinations(container, data) {
@@ -560,7 +1069,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return countries;
   }
 
-  function computeBestDestinationsFallback(originCode, continentFilter) {
+  function computeBestDestinationsLocal(originCode, continentFilter) {
     if (!state.kernel || state.airports.length === 0) return {};
     const origin = state.airportMap.get(originCode);
     if (!origin) return {};
@@ -695,7 +1204,137 @@ document.addEventListener('DOMContentLoaded', () => {
     return continentResults;
   }
 
-  function requestBestFrom() {
+  async function computeBestDestinationsNative(originCode, continentFilter) {
+    if (!state.nativeMode || state.airports.length === 0) return {};
+    const origin = state.airportMap.get(originCode);
+    if (!origin) return {};
+    const filterContinent = continentFilter || getContinent(origin.lat, origin.lon);
+    const originCountry = origin.country || '';
+    const forbiddenCountries = getForbiddenCountries(originCode);
+
+    const tier1Near = [];
+    const tier1Far = [];
+    for (const a of state.airports) {
+      if (a.code === originCode) continue;
+      if (getContinent(a.lat, a.lon) !== filterContinent) continue;
+      if (originCountry && a.country && a.country === originCountry) continue;
+      if (a.country && forbiddenCountries.has(a.country)) continue;
+      const dist = haversineKm(origin.lat, origin.lon, a.lat, a.lon);
+      if (dist <= 500) tier1Near.push(a);
+      else if (dist <= 1000) tier1Far.push(a);
+    }
+
+    const tier2Hubs = [];
+    try {
+      const directData = await fetchNativeDirectDestinations(originCode);
+      const directDests = Array.isArray(directData.destinations) ? directData.destinations : [];
+      const HUB_MIN_CONNECTIONS = 30;
+      for (const d of directDests) {
+        if (getContinent(d.lat, d.lon) !== filterContinent) continue;
+        const existing = state.airportMap.get(d.code);
+        const destCountry = d.country || existing?.country || '';
+        if (originCountry && destCountry && destCountry === originCountry) continue;
+        if (destCountry && forbiddenCountries.has(destCountry)) continue;
+        if (d.connections >= HUB_MIN_CONNECTIONS) {
+          if (existing) tier2Hubs.push(existing);
+          else tier2Hubs.push({ code: d.code, lat: d.lat, lon: d.lon, country: destCountry });
+        }
+      }
+    } catch (err) {
+      console.warn('Direct destinations unavailable:', err);
+    }
+
+    const seen = new Set();
+    const candidates = [];
+    for (const list of [tier1Near, tier2Hubs, tier1Far]) {
+      for (const a of list) {
+        if (!seen.has(a.code)) {
+          seen.add(a.code);
+          candidates.push(a);
+        }
+      }
+    }
+
+    if (candidates.length < 20) {
+      const remaining = state.airports.filter(a => {
+        if (a.code === originCode || seen.has(a.code)) return false;
+        if (originCountry && a.country && a.country === originCountry) return false;
+        if (a.country && forbiddenCountries.has(a.country)) return false;
+        return getContinent(a.lat, a.lon) === filterContinent;
+      });
+      for (const a of remaining) {
+        if (!seen.has(a.code)) {
+          seen.add(a.code);
+          candidates.push(a);
+        }
+        if (candidates.length >= 200) break;
+      }
+    }
+
+    const sample = candidates.length > 200 ? candidates.slice(0, 200) : candidates;
+    const continentResults = {};
+    const seenCountries = new Set();
+    const MAX_COUNTRIES = 5;
+
+    for (const dest of sample) {
+      if (seenCountries.size >= MAX_COUNTRIES) break;
+      const destCountry = dest.country || '';
+      if (originCountry && destCountry && destCountry === originCountry) continue;
+      if (destCountry && seenCountries.has(destCountry)) continue;
+      try {
+        const result = await runRouteSearch(originCode, dest.code, 2, 1);
+        if (!result.paths || !result.paths.length) continue;
+        const path = result.paths[0];
+        const dist = path.totalDistanceKm;
+        const efficiency = path.efficiency;
+        const reliability = efficiency * 100;
+        const score = (reliability / (dist + 1)) * 1000;
+        const continent = getContinent(dest.lat, dest.lon);
+        if (!continentResults[continent]) continentResults[continent] = [];
+        continentResults[continent].push({
+          code: dest.code,
+          lat: dest.lat,
+          lon: dest.lon,
+          country: destCountry,
+          distanceKm: dist,
+          efficiency: efficiency,
+          score: score,
+          hops: path.hops || path.legs || 0,
+          route: path.airports ? path.airports.map(a => a.code).join(' → ') : originCode + ' → ' + dest.code
+        });
+        if (destCountry) seenCountries.add(destCountry);
+      } catch (err) {
+        // Ignore failures for individual destinations
+      }
+    }
+
+    for (const continent of Object.keys(continentResults)) {
+      continentResults[continent].sort((a, b) => b.score - a.score);
+      const unique = [];
+      const countrySeen = new Set();
+      for (const item of continentResults[continent]) {
+        const c = item.country || item.code;
+        if (countrySeen.has(c)) continue;
+        countrySeen.add(c);
+        unique.push(item);
+        if (unique.length >= 5) break;
+      }
+      continentResults[continent] = unique;
+    }
+    return continentResults;
+  }
+
+  async function computeBestDestinations(originCode, continentFilter) {
+    if (state.kernel) {
+      return computeBestDestinationsLocal(originCode, continentFilter);
+    }
+    if (state.nativeMode) {
+      return computeBestDestinationsNative(originCode, continentFilter);
+    }
+    throw new Error(getWasmUnavailableMessage('경로 엔진이 준비되지 않았습니다.'));
+  }
+
+  async function requestBestFrom() {
     const fromCode = fromInput.value.trim().toUpperCase();
     if (fromCode.length !== 3 || !state.airportMap.has(fromCode)) {
       bestFromResults.innerHTML = '<div class="empty-state">유효한 3자리 IATA 코드를 입력하세요.</div>';
@@ -711,17 +1350,18 @@ document.addEventListener('DOMContentLoaded', () => {
       const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon, country: a.country || '' }));
       state.bestRequestId++;
       state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: fromCode, airports, continent });
-    } else if (state.kernel) {
-      const data = computeBestDestinationsFallback(fromCode, continent);
-      renderBestDestinations(bestFromResults, data);
-      bestFromResults.classList.remove('loading');
     } else {
-      bestFromResults.innerHTML = '<div class="empty-state">WASM 커널이 아직 로드되지 않았습니다. 잠시 후 다시 시도하세요.</div>';
+      try {
+        const data = await computeBestDestinations(fromCode, continent);
+        renderBestDestinations(bestFromResults, data);
+      } catch (err) {
+        bestFromResults.innerHTML = `<div class="empty-state">${err.message}</div>`;
+      }
       bestFromResults.classList.remove('loading');
     }
   }
 
-  function requestBestTo() {
+  async function requestBestTo() {
     const toCode = toInput.value.trim().toUpperCase();
     if (toCode.length !== 3 || !state.airportMap.has(toCode)) {
       bestToResults.innerHTML = '<div class="empty-state">유효한 3자리 IATA 코드를 입력하세요.</div>';
@@ -737,12 +1377,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon, country: a.country || '' }));
       state.bestRequestId++;
       state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: toCode, airports, continent });
-    } else if (state.kernel) {
-      const data = computeBestDestinationsFallback(toCode, continent);
-      renderBestDestinations(bestToResults, data);
-      bestToResults.classList.remove('loading');
     } else {
-      bestToResults.innerHTML = '<div class="empty-state">WASM 커널이 아직 로드되지 않았습니다. 잠시 후 다시 시도하세요.</div>';
+      try {
+        const data = await computeBestDestinations(toCode, continent);
+        renderBestDestinations(bestToResults, data);
+      } catch (err) {
+        bestToResults.innerHTML = `<div class="empty-state">${err.message}</div>`;
+      }
       bestToResults.classList.remove('loading');
     }
   }
@@ -755,51 +1396,67 @@ document.addEventListener('DOMContentLoaded', () => {
     setupTouchGestures();
     
     await initServiceWorker();
-    await initWasm();
+    const wasmReady = await initWasm();
+    let nativeReady = false;
+    if (!wasmReady) {
+      nativeReady = await enableNativeMode();
+      if (!nativeReady) {
+        applyWasmDisabledUi();
+      }
+    }
     await fetchAirports();
 
-    // Start the best-destinations Web Worker (separate WASM instance)
-    try {
-      state.bestWorker = new Worker('./best-worker.js', { type: 'module' });
-      state.bestWorker.onmessage = (e) => {
-        const msg = e.data;
-        if (msg.type === 'init') {
-          if (msg.ok) console.log('Best-destinations worker ready');
-          else console.warn('Best-destinations worker init failed:', msg.error);
-          return;
-        }
-        if (msg.type === 'result') {
-          const fromCode = fromInput.value.trim().toUpperCase();
-          const toCode = toInput.value.trim().toUpperCase();
-          if (msg.originCode === fromCode) {
-            renderBestDestinations(bestFromResults, msg.data);
-            bestFromResults.classList.remove('loading');
+    if (wasmReady) {
+      // Start the best-destinations Web Worker (separate WASM instance)
+      try {
+        state.bestWorker = new Worker(assetPaths.workerScript, { type: 'module' });
+        state.bestWorker.onmessage = (e) => {
+          const msg = e.data;
+          if (msg.type === 'init') {
+            if (msg.ok) console.log('Best-destinations worker ready');
+            else console.warn('Best-destinations worker init failed:', msg.error);
+            return;
           }
-          if (msg.originCode === toCode) {
-            renderBestDestinations(bestToResults, msg.data);
-            bestToResults.classList.remove('loading');
+          if (msg.type === 'result') {
+            const fromCode = fromInput.value.trim().toUpperCase();
+            const toCode = toInput.value.trim().toUpperCase();
+            if (msg.originCode === fromCode) {
+              renderBestDestinations(bestFromResults, msg.data);
+              bestFromResults.classList.remove('loading');
+            }
+            if (msg.originCode === toCode) {
+              renderBestDestinations(bestToResults, msg.data);
+              bestToResults.classList.remove('loading');
+            }
+            return;
           }
-          return;
-        }
-        if (msg.type === 'error') {
-          console.warn('Best-destinations worker error:', msg.error);
-        }
-      };
-      state.bestWorker.postMessage({ type: 'init' });
-    } catch (err) {
-      console.warn('Web Worker not available:', err);
+          if (msg.type === 'error') {
+            console.warn('Best-destinations worker error:', msg.error);
+          }
+        };
+        state.bestWorker.postMessage({ type: 'init' });
+      } catch (err) {
+        console.warn('Web Worker not available:', err);
+      }
     }
 
-    if (state.kernel) {
+    if (wasmReady && state.kernel) {
       const h = JSON.parse(state.kernel.getHealth());
       statRoutes.textContent = h.routes_loaded.toLocaleString();
       statWorkers.textContent = 'WASM-Serverless';
+    } else if (state.nativeMode && state.nativeHealth) {
+      if (statRoutes && typeof state.nativeHealth.routes_loaded === 'number') {
+        statRoutes.textContent = state.nativeHealth.routes_loaded.toLocaleString();
+      }
+    } else if (statRoutes) {
+      statRoutes.textContent = '--';
     }
   }
 
-  bestFromRefreshBtn.addEventListener('click', requestBestFrom);
-  bestToRefreshBtn.addEventListener('click', requestBestTo);
+  bestFromRefreshBtn.addEventListener('click', () => { requestBestFrom().catch(err => console.error(err)); });
+  bestToRefreshBtn.addEventListener('click', () => { requestBestTo().catch(err => console.error(err)); });
 
+  setActivePanel(state.uiMode || 'manual');
   resizeAllCanvases();
   init();
 });
