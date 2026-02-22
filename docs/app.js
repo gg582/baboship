@@ -1,6 +1,6 @@
 const state = {
-  airports: [],
-  airportMap: new Map(),
+  nodes: [], // Renamed from airports
+  nodeMap: new Map(), // Renamed from airportMap
   routes: [],
   activeField: 'from',
   selection: { from: null, to: null },
@@ -10,11 +10,107 @@ const state = {
   bestRequestId: 0,
   isMobile: false,
   uiMode: 'manual',
-  trackingEvents: [],
+  trackingEventsIntl: [],
+  domesticTrackingEvents: [],
   wasmUnavailableReason: '',
   nativeMode: false,
   nativeHealth: null,
   nativeDirectCache: new Map()
+};
+
+// Global MapLibre map objects
+let mainMapLibre = null;
+let modalMapLibre = null;
+
+const MapLayerStyle = {
+  NODE_CIRCLE: {
+    id: 'nodes-circle',
+    type: 'circle',
+    source: 'nodes',
+    paint: {
+      'circle-color': [
+        'match',
+        ['get', 'layer'],
+        'air', '#3399FF',
+        'sea', '#66BB6A',
+        '#FF3333' // Default for 'land' or unknown
+      ],
+      'circle-radius': [
+        'case',
+        ['boolean', ['feature-state', 'selected'], false], 8,
+        ['boolean', ['feature-state', 'hover'], false], 6,
+        4
+      ],
+      'circle-stroke-color': '#fff',
+      'circle-stroke-width': 1
+    }
+  },
+  NODE_SYMBOL: {
+    id: 'nodes-symbol',
+    type: 'symbol',
+    source: 'nodes',
+    layout: {
+      'text-field': ['get', 'code'],
+      'text-font': ['IBM Plex Sans KR Medium', 'Arial Unicode MS Regular'],
+      'text-size': 10,
+      'text-offset': [0, 1],
+      'text-anchor': 'top'
+    },
+    paint: {
+      'text-color': '#fff',
+      'text-halo-color': '#000',
+      'text-halo-width': 1
+    }
+  },
+  ROUTE_LINE_HIGHLIGHT: {
+    id: 'routes-line-highlight',
+    type: 'line',
+    source: 'routes',
+    layout: {
+      'line-join': 'round',
+      'line-cap': 'round'
+    },
+    paint: {
+      'line-color': '#FFD700', // Gold for highlight
+      'line-width': 4,
+      'line-opacity': 0.75
+    },
+    filter: ['==', ['get', 'id'], ''] // Hidden by default
+  },
+  ROUTE_LINE: {
+    id: 'routes-line',
+    type: 'line',
+    source: 'routes',
+    layout: {
+      'line-join': 'round',
+      'line-cap': 'round'
+    },
+    paint: {
+      'line-color': [
+        'match',
+        ['get', 'layer'],
+        'air', '#22d3ee', // Cyan
+        'sea', '#5eead4', // Teal
+        '#FF3333' // Red for 'land' or unknown
+      ],
+      'line-width': 2,
+      'line-opacity': 0.6
+    }
+  },
+  ORS_ROUTE_LINE: { // New style for ORS road-based route
+    id: 'ors-route-line',
+    type: 'line',
+    source: 'ors-route',
+    layout: {
+      'line-join': 'round',
+      'line-cap': 'round'
+    },
+    paint: {
+      'line-color': '#FF8C00', // Dark Orange
+      'line-width': 3,
+      'line-opacity': 0.8
+    }
+  }
 };
 
 function getWasmUnavailableMessage(fallback = 'WASM 커널이 아직 초기화되지 않았습니다.') {
@@ -32,6 +128,7 @@ function resolveAssetBase() {
   return new URL('./', window.location.href);
 }
 
+
 const ASSET_BASE = resolveAssetBase();
 const resolveAsset = (path) => new URL(path, ASSET_BASE).href;
 
@@ -39,13 +136,16 @@ const assetPaths = {
   wasmModule: resolveAsset('wasm/nuke_kernel.js'),
   wasmBlob: resolveAsset('wasm/nuke_blob.bin'),
   workerScript: resolveAsset('best-worker.js'),
-  airportsJson: resolveAsset('airports.json'),
+  // airportsJson: resolveAsset('airports.json'), // Removed - now fetched via WASM kernel
   serviceWorker: resolveAsset('sw.js')
 };
 
 const trackerConfig = (typeof window !== 'undefined' && window.__baboship_config) ? window.__baboship_config : {};
 const TRACKER_DELIVERY_API = trackerConfig.trackerApiBase || 'https://apis.tracker.delivery';
 const TRACKER_API_KEY = trackerConfig.trackerApiKey || '';
+
+const ORS_API_KEY = trackerConfig.orsApiKey || ''; // Placeholder for ORS API Key
+const ORS_BASE_URL = 'https://api.openrouteservice.org/v2/directions/driving-car'; // ORS Directions API
 
 function clampNumber(value, min, max) {
   const num = Number(value);
@@ -103,18 +203,35 @@ async function analyzeTrackingNative(payload) {
   });
 }
 
+async function fetchORSPath(originCoords, destCoords) {
+  if (!ORS_API_KEY) {
+    console.warn('ORS_API_KEY is not set. Cannot fetch road path.');
+    return null;
+  }
+  const url = `${ORS_BASE_URL}?api_key=${ORS_API_KEY}&start=${originCoords.lon},${originCoords.lat}&end=${destCoords.lon},${destCoords.lat}`;
+  try {
+    const data = await fetchJsonOrError(url, { method: 'GET' });
+    if (data.features && data.features.length > 0) {
+      // The first feature should contain the main route geometry
+      return {
+        geojson: data.features[0].geometry,
+        distance: data.features[0].properties.summary.distance, // meters
+        duration: data.features[0].properties.summary.duration  // seconds
+      };
+    }
+  } catch (err) {
+    console.error('Failed to fetch ORS path:', err);
+    return null;
+  }
+  return null;
+}
+
 // Mobile device detection
 function detectMobile() {
-  // Primary check: user agent for common mobile/tablet devices
   const userAgent = navigator.userAgent || navigator.vendor || window.opera;
   const mobileRegex = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i;
-  
-  // Feature detection: touch support combined with screen size
   const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
   const isMobileScreen = window.innerWidth <= 768;
-  
-  // Return true if user agent matches mobile patterns, or if device has touch and smaller screen
-  // This allows iPads to be detected via user agent but excludes desktop touch screens
   return mobileRegex.test(userAgent.toLowerCase()) || (hasTouch && isMobileScreen);
 }
 
@@ -145,7 +262,7 @@ async function initWasm() {
     // Bind WASM functions via cwrap (wraps C-exported symbols)
     state.kernel.initStore = state.kernel.cwrap('nuke_wasm_init', 'number', []);
     state.kernel.loadData = state.kernel.cwrap('nuke_wasm_load_data', 'number', ['number', 'number']);
-    state.kernel.getAirports = state.kernel.cwrap('nuke_wasm_get_airports_json', 'string', []);
+    state.kernel.getNodes = state.kernel.cwrap('nuke_wasm_get_nodes_json', 'string', []); // Changed from getAirports
     state.kernel.getBest = state.kernel.cwrap('nuke_wasm_get_best_nodes_json', 'string', []);
     state.kernel.getHealth = state.kernel.cwrap('nuke_wasm_get_health_json', 'string', []);
     state.kernel.searchRoutes = state.kernel.cwrap('nuke_wasm_search_routes_json', 'string', ['string', 'string', 'number']);
@@ -153,9 +270,6 @@ async function initWasm() {
     state.kernel.getDirectDests = state.kernel.cwrap('nuke_wasm_get_direct_destinations_json', 'string', ['string']);
     state.kernel.analyzeTracking = state.kernel.cwrap('analyze_tracking', 'string', ['string']);
 
-    // cwrap returns the raw function for numeric-only signatures; fall back to
-    // the underscore-prefixed direct export when the symbol is present but
-    // cwrap could not resolve it (e.g. after streaming-compile race).
     if (typeof state.kernel.initStore !== 'function') {
       if (typeof state.kernel._nuke_wasm_init === 'function') {
         state.kernel.initStore = state.kernel._nuke_wasm_init;
@@ -202,7 +316,6 @@ async function initServiceWorker() {
   if ('serviceWorker' in navigator) {
     try {
       await navigator.serviceWorker.register(assetPaths.serviceWorker, { type: 'module' });
-      // Wait for SW to be active and controlling this page
       await navigator.serviceWorker.ready;
       console.log('Service Worker ready at scope:', navigator.serviceWorker.controller?.scriptURL);
     } catch (err) {
@@ -210,14 +323,6 @@ async function initServiceWorker() {
     }
   }
 }
-
-const continentShapes = [
-  [[-168,72],[-140,60],[-120,50],[-110,45],[-95,50],[-80,45],[-60,45],[-55,25],[-75,8],[-95,10],[-120,25],[-135,40],[-150,60]],
-  [[-82,12],[-75,-2],[-70,-15],[-65,-30],[-60,-50],[-45,-55],[-40,-30],[-50,0]],
-  [[-10,70],[40,70],[90,60],[120,60],[140,50],[160,45],[170,60],[180,75],[180,25],[150,20],[120,20],[90,10],[60,5],[40,-10],[20,-20],[0,-25],[-10,0],[-5,20]],
-  [[-20,35],[10,35],[25,32],[35,20],[30,5],[25,-10],[20,-25],[15,-35],[0,-30],[-10,-5]],
-  [[110,-10],[125,-25],[140,-35],[150,-35],[155,-25],[150,-15],[135,-10],[120,-15]]
-];
 
 const LOCATION_HINTS = [
   { pattern: /(INCHEON|ICN|인천)/i, alias: 'INCHEON' },
@@ -259,8 +364,22 @@ const KOREA_POST_FACILITY_HINTS = [
   }
 ];
 
+const MAJOR_LOGISTICS_CENTERS = [
+  { alias: 'ICN_HUB', keywords: ['인천국제공항', '인천허브', 'ICN'], lat: 37.4692, lon: 126.4505, countryCode: 'KR' },
+  { alias: 'GMP_HUB', keywords: ['김포공항', '김포허브', 'GMP'], lat: 37.5582, lon: 126.7915, countryCode: 'KR' },
+  { alias: 'PUS_HUB', keywords: ['부산', '김해공항', 'PUS'], lat: 35.1796, lon: 129.0756, countryCode: 'KR' },
+  { alias: 'CJJ_HUB', keywords: ['청주공항', '청주', 'CJJ'], lat: 36.7170, lon: 127.4912, countryCode: 'KR' },
+  { alias: 'CJU_HUB', keywords: ['제주공항', '제주', 'CJU'], lat: 33.5110, lon: 126.4933, countryCode: 'KR' },
+  { alias: 'GWANGJU_HUB', keywords: ['광주', '무안공항', 'KWJ'], lat: 35.1601, lon: 126.8510, countryCode: 'KR' },
+  { alias: 'DAEJEON_HUB', keywords: ['대전', '대덕', 'DCC'], lat: 36.3504, lon: 127.3845, countryCode: 'KR' },
+  { alias: 'D_HUB_ILSA', keywords: ['CJ대한통운 일산', '일산'], lat: 37.6749, lon: 126.7583, countryCode: 'KR' }, // Example of a specific non-airport hub
+  { alias: 'D_HUB_GUNPO', keywords: ['한진택배 군포', '군포'], lat: 37.3601, lon: 126.9360, countryCode: 'KR' }, // Example of a specific non-airport hub
+];
+
+
 document.addEventListener('DOMContentLoaded', () => {
-  const mainCanvas = document.getElementById('route-map');
+  const mapContainer = document.getElementById('map-container');
+  const mapContainerLarge = document.getElementById('map-container-large');
   const loader = document.getElementById('map-loader');
   const statusEl = document.getElementById('map-status');
   const resultsEl = document.getElementById('route-results');
@@ -278,6 +397,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const modeTabs = document.querySelectorAll('[data-mode-tab]');
   const manualPanel = document.querySelector('[data-panel="manual"]');
   const trackingPanel = document.querySelector('[data-panel="tracking"]');
+  const domesticTrackingPanel = document.querySelector('[data-panel="domestic-tracking"]');
   const mapModeButtons = document.querySelectorAll('.map-mode button');
   const bestFromTitle = document.getElementById('best-from-title');
   const bestToTitle = document.getElementById('best-to-title');
@@ -288,198 +408,195 @@ document.addEventListener('DOMContentLoaded', () => {
   const bestFromContinentSelect = document.getElementById('best-from-continent');
   const bestToContinentSelect = document.getElementById('best-to-continent');
   const mapModal = document.getElementById('map-modal');
-  const modalCanvas = document.getElementById('route-map-large');
   const modalCloseBtn = document.getElementById('map-modal-close');
-  const trackingNumberInput = document.getElementById('tracking-number');
-  const trackingFetchBtn = document.getElementById('tracking-fetch-btn');
-  const trackingLogInput = document.getElementById('tracking-log-input');
-  const trackingAnalyzeBtn = document.getElementById('tracking-analyze-btn');
-  const trackingStatus = document.getElementById('tracking-status');
-  const trackingMetrics = document.getElementById('tracking-metrics');
-  const trackingTimeline = document.getElementById('tracking-timeline');
+  const trackingNumberInputIntl = document.getElementById('tracking-number-intl');
+  const trackingFetchBtnIntl = document.getElementById('tracking-fetch-btn-intl');
+  const trackingLogInputIntl = document.getElementById('tracking-log-input-intl');
+  const trackingAnalyzeBtnIntl = document.getElementById('tracking-analyze-btn-intl');
+  const trackingStatusIntl = document.getElementById('tracking-status-intl');
+  const trackingMetricsIntl = document.getElementById('tracking-metrics-intl');
+  const trackingTimelineIntl = document.getElementById('tracking-timeline-intl');
 
-  const projectPoint = (lon, lat) => {
-    const u = (lon + 180) / 360;
-    // Clamp latitude to Web Mercator bounds (±85.051129°) to avoid singularity at poles
-    const clampedLat = Math.max(-85.051129, Math.min(85.051129, lat));
-    const latRad = clampedLat * Math.PI / 180;
-    const v = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2;
-    return { u, v };
-  };
-  const view = { zoom: 1, minZoom: 1, maxZoom: 18, centerX: 0.5, centerY: 0.5 };
+  const trackingNumberInputDomestic = document.getElementById('tracking-number-domestic');
+  const carrierSelectDomestic = document.getElementById('carrier-select-domestic');
+  const trackingFetchBtnDomestic = document.getElementById('tracking-fetch-btn-domestic');
+  const trackingLogInputDomestic = document.getElementById('tracking-log-input-domestic');
+  const trackingStatusDomestic = document.getElementById('tracking-status-domestic');
+  const trackingMetricsDomestic = document.getElementById('tracking-metrics-domestic');
+  const trackingTimelineDomestic = document.getElementById('tracking-timeline-domestic');
 
-  // --- OpenStreetMap tile layer ---
-  const tileCache = new Map();
+  // --- MapLibre GL JS Integration ---
+  function initMap(containerId, isModal = false) {
+    const map = new maplibregl.Map({
+      container: containerId,
+      style: 'https://tiles.stadiamaps.com/styles/stadium-dark.json', // Example style, could use OpenFreeMap
+      center: [0, 0], // starting position [lng, lat]
+      zoom: 1 // starting zoom
+    });
 
-  function getTileImage(z, x, y) {
-    const key = `${z}/${x}/${y}`;
-    if (tileCache.has(key)) return tileCache.get(key);
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    const entry = { img, loaded: false };
-    img.onload = () => { entry.loaded = true; drawAllScenes(); };
-    img.onerror = () => { entry.loaded = false; };
-    img.src = `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
-    tileCache.set(key, entry);
-    // Cap cache at ~600 tiles (~150 MB) to limit memory usage
-    if (tileCache.size > 600) {
-      const iter = tileCache.keys();
-      for (let i = 0; i < 60; i++) {
-        const k = iter.next().value;
-        if (k) tileCache.delete(k);
-      }
-    }
-    return entry;
-  }
+    map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
-  function drawTiles(ctx, canvas, viewport) {
-    // Determine OSM zoom level from our continuous zoom
-    const osmZoom = Math.max(0, Math.min(18, Math.round(Math.log2(view.zoom) + 1)));
-    const numTiles = Math.pow(2, osmZoom);
-
-    // Visible range in tile coords
-    const tileLeft = Math.floor(viewport.left * numTiles);
-    const tileRight = Math.ceil((viewport.left + viewport.width) * numTiles);
-    const tileTop = Math.floor(viewport.top * numTiles);
-    const tileBottom = Math.ceil((viewport.top + viewport.height) * numTiles);
-
-    for (let tx = tileLeft; tx < tileRight; tx++) {
-      for (let ty = tileTop; ty < tileBottom; ty++) {
-        // Wrap horizontally, skip out-of-range vertically
-        const wrappedX = ((tx % numTiles) + numTiles) % numTiles;
-        if (ty < 0 || ty >= numTiles) continue;
-
-        const entry = getTileImage(osmZoom, wrappedX, ty);
-        // Tile bounds in [0,1] world space
-        const tileU = tx / numTiles;
-        const tileV = ty / numTiles;
-        const tileSizeU = 1 / numTiles;
-        const tileSizeV = 1 / numTiles;
-
-        const sx = ((tileU - viewport.left) / viewport.width) * canvas.width;
-        const sy = ((tileV - viewport.top) / viewport.height) * canvas.height;
-        const sw = (tileSizeU / viewport.width) * canvas.width;
-        const sh = (tileSizeV / viewport.height) * canvas.height;
-
-        if (entry.loaded) {
-          ctx.drawImage(entry.img, sx, sy, sw, sh);
-        } else {
-          ctx.fillStyle = '#1a1a2e';
-          ctx.fillRect(sx, sy, sw, sh);
+    map.on('load', () => {
+      map.addSource('nodes', {
+        type: 'geojson',
+        data: {
+          type: 'FeatureCollection',
+          features: []
         }
-      }
-    }
-  }
-  let statusBeforeModal = '';
-  const dragState = { active: false, pointerId: null, lastX: 0, lastY: 0, moved: false, blockClick: false };
-  const touchState = { touches: [], initialDistance: 0, initialZoom: 1 };
-  const mapCanvases = new Map();
-
-  function registerCanvas(key, element) { if (!element) return; mapCanvases.set(key, { canvas: element, ctx: element.getContext('2d') }); }
-  registerCanvas('main', mainCanvas);
-  registerCanvas('modal', modalCanvas);
-
-  function getViewWindow() {
-    const width = 1 / view.zoom, height = 1 / view.zoom;
-    return { left: view.centerX - width/2, top: view.centerY - height/2, width, height };
-  }
-
-  function clampViewCenter() {
-    const halfW = 0.5 / view.zoom, halfH = 0.5 / view.zoom;
-    if (1/view.zoom >= 1) { view.centerX = 0.5; view.centerY = 0.5; }
-    else {
-      view.centerX = Math.min(Math.max(view.centerX, halfW), 1 - halfW);
-      view.centerY = Math.min(Math.max(view.centerY, halfH), 1 - halfH);
-    }
-  }
-
-  function worldToCanvas(u, v, viewport, targetCanvas) {
-    return { x: ((u - viewport.left) / viewport.width) * targetCanvas.width, y: ((v - viewport.top) / viewport.height) * targetCanvas.height };
-  }
-
-  function canvasToWorld(normX, normY, viewport) {
-    return { u: viewport.left + normX * viewport.width, v: viewport.top + normY * viewport.height };
-  }
-
-  function resizeAllCanvases() {
-    mapCanvases.forEach(target => {
-      const rect = target.canvas.getBoundingClientRect();
-      target.canvas.width = rect.width; target.canvas.height = rect.height;
-    });
-    drawAllScenes();
-  }
-
-  function drawSceneOnTarget(target) {
-    const { ctx, canvas } = target; if (!canvas.width) return;
-    const viewport = getViewWindow();
-    ctx.fillStyle = '#02142f'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    // Draw OSM tile layer
-    drawTiles(ctx, canvas, viewport);
-    // Scale airport dot radius with zoom so dots remain visible at high zoom levels.
-    // Beyond a baseline zoom the radius grows logarithmically to stay perceptible
-    // against the increasingly detailed tile layer.
-    const baseZoom = 4;
-    const dotScale = view.zoom > baseZoom ? Math.max(1, 1 + Math.log2(view.zoom / baseZoom)) : 1;
-    state.airports.forEach(a => {
-      const c = worldToCanvas(a.u, a.v, viewport, canvas);
-      const sel = (state.selection.from?.code === a.code || state.selection.to?.code === a.code);
-      ctx.fillStyle = sel ? '#fbbf24' : 'rgba(148,163,184,0.55)';
-      const r = (sel ? 4 : 2) * dotScale;
-      ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, Math.PI*2); ctx.fill();
-    });
-    state.routes.forEach((route, idx) => {
-      ctx.strokeStyle = idx === 0 ? '#22d3ee' : '#5eead4'; ctx.lineWidth = 2; ctx.beginPath();
-      route.airports.map(a => state.airportMap.get(a.code)).filter(Boolean).forEach((a, i) => {
-        const c = worldToCanvas(a.u, a.v, viewport, canvas);
-        if (i === 0) ctx.moveTo(c.x, c.y); else ctx.lineTo(c.x, c.y);
       });
-      ctx.stroke();
+      map.addSource('routes', {
+        type: 'geojson',
+        data: {
+          type: 'FeatureCollection',
+          features: []
+        }
+      });
+      map.addSource('ors-route', { // New source for ORS road-based route
+        type: 'geojson',
+        data: {
+          type: 'FeatureCollection',
+          features: []
+        }
+      });
+
+      map.addLayer(MapLayerStyle.ROUTE_LINE);
+      map.addLayer(MapLayerStyle.ROUTE_LINE_HIGHLIGHT);
+      map.addLayer(MapLayerStyle.ORS_ROUTE_LINE); // Add the new ORS route layer
+      map.addLayer(MapLayerStyle.NODE_CIRCLE);
+      map.addLayer(MapLayerStyle.NODE_SYMBOL);
+
+      // Node click handler
+      map.on('click', MapLayerStyle.NODE_CIRCLE.id, (e) => {
+        if (e.features.length > 0) {
+          const clickedNode = e.features[0].properties;
+          const node = state.nodeMap.get(clickedNode.code);
+          if (node) {
+            setInputField(state.activeField, node.code);
+          }
+        }
+      });
+
+      // Change the cursor to a pointer when the mouse is over the nodes-circle layer.
+      map.on('mouseenter', MapLayerStyle.NODE_CIRCLE.id, () => {
+        map.getCanvas().style.cursor = 'pointer';
+      });
+
+      // Change it back to a pointer when it leaves.
+      map.on('mouseleave', MapLayerStyle.NODE_CIRCLE.id, () => {
+        map.getCanvas().style.cursor = '';
+      });
+      
+      if (!isModal) {
+        fetchNodes(); // Call fetchNodes here after main map is loaded
+      }
+    });
+
+    return map;
+  }
+
+  function updateMapNodes(mapInstance) {
+    if (!mapInstance || !mapInstance.getSource('nodes')) return;
+    const features = state.nodes.map(node => ({
+      type: 'Feature',
+      properties: {
+        code: node.code,
+        name: node.name,
+        country: node.country,
+        layer: node.layer
+      },
+      geometry: {
+        type: 'Point',
+        coordinates: [node.lon, node.lat] // GeoJSON is [longitude, latitude]
+      }
+    }));
+    mapInstance.getSource('nodes').setData({
+      type: 'FeatureCollection',
+      features: features
     });
   }
 
-  function drawAllScenes() { mapCanvases.forEach(drawSceneOnTarget); }
+  function updateMapRoutes(mapInstance, paths) { // Renamed routesToDisplay to paths
+    if (!mapInstance || !mapInstance.getSource('routes')) return;
+    const features = paths.map((path, idx) => ({ // Changed route to path
+      type: 'Feature',
+      geometry: {
+        type: 'LineString',
+        coordinates: path.nodes.map(nodeCode => { // Assuming path.nodes is array of nodeCodes
+          const node = state.nodeMap.get(nodeCode); 
+          return [node.lon, node.lat];
+        })
+      },
+      properties: {
+        id: `route-${idx}`, // Unique ID for filtering
+        layer: path.layer // Assuming layer is available in path object from WASM
+      }
+    }));
+    mapInstance.getSource('routes').setData({
+      type: 'FeatureCollection',
+      features: features
+    });
+  }
+
+  function updateORSMapRoute(mapInstance, orsGeojson) {
+    if (!mapInstance || !mapInstance.getSource('ors-route')) return;
+    mapInstance.getSource('ors-route').setData({
+      type: 'FeatureCollection',
+      features: orsGeojson ? [{ type: 'Feature', geometry: orsGeojson }] : []
+    });
+  }
 
   function setInputField(field, value) {
     const val = (value || '').trim().toUpperCase();
     if (field === 'from') fromInput.value = val; else toInput.value = val;
-    state.selection[field] = state.airportMap.get(val) || null;
+    
+    // Clear previous selection highlight
+    if (state.selection.from) mainMapLibre.setFeatureState({source: 'nodes', id: state.selection.from.code}, {selected: false});
+    if (state.selection.to) mainMapLibre.setFeatureState({source: 'nodes', id: state.selection.to.code}, {selected: false});
+
+    const selectedNode = state.nodeMap.get(val);
+    state.selection[field] = selectedNode || null;
     selectionFrom.textContent = state.selection.from?.code || '--';
     selectionTo.textContent = state.selection.to?.code || '--';
-    drawAllScenes();
+
+    // Apply new selection highlight
+    if (selectedNode) {
+      mainMapLibre.setFeatureState({source: 'nodes', id: selectedNode.code}, {selected: true});
+      // Also update modal map if open
+      if (mapModal.classList.contains('open') && modalMapLibre) {
+         modalMapLibre.setFeatureState({source: 'nodes', id: selectedNode.code}, {selected: true});
+      }
+    }
   }
 
-  async function fetchAirports() {
-    loader.textContent = '공항 데이터를 불러오는 중...';
+  // Changed from fetchAirports
+  async function fetchNodes() {
+    loader.textContent = '노드 데이터를 불러오는 중...';
     try {
       let data;
-      if (state.nativeMode) {
-        data = await fetchJsonOrError('./airports?limit=8192');
+      // When WASM is ready, use the WASM kernel to get nodes data
+      if (state.kernel && typeof state.kernel.getNodes === 'function') {
+        data = JSON.parse(state.kernel.getNodes());
+      } else if (state.nativeMode) {
+        // Fallback to native server if WASM not available
+        data = await fetchJsonOrError('./nodes?limit=8192'); // Assuming a /nodes endpoint
       } else {
-        // Try SW-intercepted endpoint first; fall back to direct JSON file
-        // when the service worker is not yet controlling this page (first visit).
-        const swControlling = !!navigator.serviceWorker?.controller;
-        if (swControlling) {
-          try {
-            data = await fetchJsonOrError('./airports?limit=8192');
-          } catch {
-            data = null;
-          }
-        }
+        throw new Error(getWasmUnavailableMessage('노드 엔진이 준비되지 않았습니다.'));
       }
-      if (!data || !Array.isArray(data.airports)) {
-        const response = await fetch(assetPaths.airportsJson);
-        if (!response.ok) throw new Error('공항 데이터를 불러오지 못했습니다.');
-        const allAirports = await response.json();
-        data = { airports: allAirports.slice(0, 8192) };
+
+      const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+      state.nodes = nodes;
+      state.nodeMap = new Map(state.nodes.map(n => [n.code, n]));
+      statAirports.textContent = state.nodes.length.toLocaleString(); // Still using statAirports for total nodes
+
+      updateMapNodes(mainMapLibre);
+      if (mapModal.classList.contains('open')) {
+        updateMapNodes(modalMapLibre);
       }
-      const airports = Array.isArray(data.airports) ? data.airports : [];
-      state.airports = airports.map(a => ({ ...a, ...projectPoint(a.lon, a.lat) }));
-      state.airportMap = new Map(state.airports.map(a => [a.code, a]));
-      statAirports.textContent = state.airports.length.toLocaleString();
+      
       loader.style.display = 'none';
-      drawAllScenes();
     } catch (err) {
       loader.textContent = '데이터 로드 실패: ' + err.message;
+      loader.classList.add('error');
     }
   }
 
@@ -492,14 +609,19 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     if (manualPanel) manualPanel.classList.toggle('hidden', mode !== 'manual');
     if (trackingPanel) trackingPanel.classList.toggle('hidden', mode !== 'tracking');
+    if (domesticTrackingPanel) domesticTrackingPanel.classList.toggle('hidden', mode !== 'domestic-tracking');
+    
+    // Trigger map resize when panel becomes visible
+    if (mainMapLibre) mainMapLibre.resize();
+    if (modalMapLibre && mapModal.classList.contains('open')) modalMapLibre.resize();
   }
 
-  function setTrackingStatus(message, variant = 'info') {
-    if (!trackingStatus) return;
-    trackingStatus.textContent = message;
-    trackingStatus.classList.remove('error', 'success');
-    if (variant === 'error') trackingStatus.classList.add('error');
-    if (variant === 'success') trackingStatus.classList.add('success');
+  function setTrackingStatus(element, message, variant = 'info') {
+    if (!element) return;
+    element.textContent = message;
+    element.classList.remove('error', 'success');
+    if (variant === 'error') element.classList.add('error');
+    if (variant === 'success') element.classList.add('success');
   }
 
   async function enableNativeMode() {
@@ -508,8 +630,8 @@ document.addEventListener('DOMContentLoaded', () => {
       state.nativeMode = true;
       state.nativeHealth = data;
       state.wasmUnavailableReason = '';
-      if (typeof data.airports_loaded === 'number' && statAirports) {
-        statAirports.textContent = data.airports_loaded.toLocaleString();
+      if (typeof data.nodes_loaded === 'number' && statAirports) { // Changed from airports_loaded
+        statAirports.textContent = data.nodes_loaded.toLocaleString();
       }
       if (typeof data.routes_loaded === 'number' && statRoutes) {
         statRoutes.textContent = data.routes_loaded.toLocaleString();
@@ -529,7 +651,13 @@ document.addEventListener('DOMContentLoaded', () => {
   function applyWasmDisabledUi(messageOverride) {
     if (state.nativeMode) return;
     const reason = messageOverride || getWasmUnavailableMessage('이 환경에서는 WASM 기능을 사용할 수 없습니다.');
-    const controls = [searchBtn, trackingAnalyzeBtn, bestFromRefreshBtn, bestToRefreshBtn];
+    const controls = [
+      searchBtn,
+      trackingAnalyzeBtnIntl,
+      bestFromRefreshBtn,
+      bestToRefreshBtn,
+      trackingFetchBtnDomestic
+    ];
     controls.forEach((btn) => {
       if (!btn) return;
       btn.disabled = true;
@@ -539,8 +667,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (resultsEl) resultsEl.innerHTML = `<div class="empty-state">${reason}</div>`;
     if (bestFromResults) bestFromResults.innerHTML = `<div class="empty-state">${reason}</div>`;
     if (bestToResults) bestToResults.innerHTML = `<div class="empty-state">${reason}</div>`;
-    if (trackingMetrics) trackingMetrics.innerHTML = `<div class="empty-state">${reason}</div>`;
-    if (trackingStatus) setTrackingStatus(reason, 'error');
+    if (trackingMetricsIntl) trackingMetricsIntl.innerHTML = `<div class="empty-state">${reason}</div>`;
+    if (trackingStatusIntl) setTrackingStatus(trackingStatusIntl, reason, 'error');
+    if (trackingMetricsDomestic) trackingMetricsDomestic.innerHTML = `<div class="empty-state">${reason}</div>`;
+    if (trackingStatusDomestic) setTrackingStatus(trackingStatusDomestic, reason, 'error');
     if (statWorkers) statWorkers.textContent = '로컬 모드';
   }
 
@@ -563,6 +693,14 @@ document.addEventListener('DOMContentLoaded', () => {
       for (const hint of LOCATION_HINTS) {
         if (hint.pattern.test(candidate)) return hint.alias;
       }
+      // New: Check against MAJOR_LOGISTICS_CENTERS keywords
+      const cleanedCandidate = candidate.toUpperCase();
+      for (const center of MAJOR_LOGISTICS_CENTERS) {
+        if (center.keywords.some(keyword => cleanedCandidate.includes(keyword.toUpperCase()))) {
+          return center.alias;
+        }
+      }
+
       const cleaned = candidate.replace(/[^A-Za-z]/g, '').toUpperCase();
       if (cleaned.length >= 6) return cleaned.slice(0, 6);
       if (cleaned.length === 3) return cleaned;
@@ -629,6 +767,77 @@ document.addEventListener('DOMContentLoaded', () => {
     return carriers;
   }
 
+  // --- Domestic Tracking Functions ---
+
+  // Modulus 7 implementation for domestic tracking numbers
+  function verifyMod7Js(trackNo) {
+      const len = trackNo.length;
+      if (len < 10) return false;
+
+      let mainPart = 0;
+      const checkDigit = parseInt(trackNo[len - 1], 10);
+
+      for (let i = 0; i < len - 1; i++) {
+          mainPart = (mainPart * 10) + parseInt(trackNo[i], 10);
+      }
+
+      return (mainPart % 7) === checkDigit;
+  }
+
+  // Auto-detect domestic carriers based on tracking number patterns
+  function resolveDomesticCarriers(trackNo) {
+      const normalized = (trackNo || '').trim().replace(/[^0-9]/g, ''); // Remove non-digits
+      const carriers = [];
+      const pushUnique = (id, label) => {
+          if (!carriers.some(entry => entry.id === id)) {
+              carriers.push({ id, label });
+          }
+      };
+
+      // Specific rules
+      // 우체국택배 (13자리, 1,2,5,6으로 시작)
+      if (normalized.length === 13 && (/^1\d{12}$/.test(normalized) || /^2\d{12}$/.test(normalized) || /^5\d{12}$/.test(normalized) || /^6\d{12}$/.test(normalized))) {
+          pushUnique('kr.epost', '우체국택배');
+          return carriers; // If matched, it's highly likely Epost, so return directly
+      }
+      // 로젠택배 (11자리, Mod 7)
+      if (normalized.length === 11 && verifyMod7Js(normalized)) {
+          pushUnique('kr.logen', '로젠택배');
+          return carriers;
+      }
+
+      // Overlapping rules (Mod 7, 10 or 12 digits) - these will be candidates
+      if ((normalized.length === 10 || normalized.length === 12) && verifyMod7Js(normalized)) {
+          pushUnique('kr.cjlogistics', 'CJ대한통운');
+          pushUnique('kr.hanjin', '한진택배');
+      }
+      
+      // CU/GS25 (10 digits) - often uses CJ Logistics backend
+      if (normalized.length === 10) {
+          pushUnique('kr.cupost', 'CU 편의점택배');
+          pushUnique('kr.cvsnet', 'GS25 편의점택배');
+          pushUnique('kr.cjlogistics', 'CJ대한통운'); // Sometimes uses CJ backend
+      }
+      
+      // Fallback for Mod 7 (if not caught by specific length rules and no other carriers added)
+      if (verifyMod7Js(normalized) && carriers.length === 0) {
+           pushUnique('kr.cjlogistics', 'CJ대한통운');
+           pushUnique('kr.hanjin', '한진택배');
+           pushUnique('kr.logen', '로젠택배');
+      }
+
+      // General 10-12 digit fallbacks if nothing specific found and no carriers yet
+      if (carriers.length === 0) {
+          if (normalized.length === 10 || normalized.length === 12) {
+              pushUnique('kr.cjlogistics', 'CJ대한통운');
+              pushUnique('kr.hanjin', '한진택배');
+          }
+      }
+
+      return carriers;
+  }
+
+
   function getEventDate(progress) {
     const candidates = [
       progress?.time,
@@ -671,6 +880,16 @@ document.addEventListener('DOMContentLoaded', () => {
       const date = getEventDate(progress);
       const token = formatTimestampToken(date);
       if (!alias || !token) return null;
+
+      let lat = null;
+      let lon = null;
+      // Attempt to resolve lat/lon from state.nodeMap using the alias
+      const resolvedNode = state.nodeMap.get(alias);
+      if (resolvedNode) {
+        lat = resolvedNode.lat;
+        lon = resolvedNode.lon;
+      }
+
       return {
         alias,
         countryCode,
@@ -678,13 +897,16 @@ document.addEventListener('DOMContentLoaded', () => {
         statusText: progress?.status?.text || progress?.description || progress?.message || '',
         statusCode: progress?.status?.code || '',
         timestampToken: token,
+        safetyStatus: progress?.safetyStatus || 'UNKNOWN', // Assuming safety status from API
         displayTime: formatTimelineTime(date),
+        lat, // Added latitude
+        lon, // Added longitude
         raw: progress
       };
     }).filter(Boolean);
   }
 
-  async function fetchTrackingEvents(invoice, candidateOverride) {
+  async function fetchTrackingEventsIntl(invoice, candidateOverride) {
     const candidates = Array.isArray(candidateOverride) && candidateOverride.length
       ? candidateOverride
       : resolveKoreaPostCarriers(invoice);
@@ -735,14 +957,14 @@ document.addEventListener('DOMContentLoaded', () => {
     return events.map(evt => `${evt.alias} ${evt.timestampToken} ${evt.statusText || ''}`.trim()).join('\n');
   }
 
-  function renderTrackingMetrics(result) {
-    if (!trackingMetrics) return;
+  function renderTrackingMetrics(metricsElement, result) {
+    if (!metricsElement) return;
     if (!result || typeof result !== 'object') {
-      trackingMetrics.innerHTML = '<div class="empty-state">분석 결과가 없습니다.</div>';
+      metricsElement.innerHTML = '<div class="empty-state">분석 결과가 없습니다.</div>';
       return;
     }
     const formatPercent = (value) => (value * 100).toFixed(1) + '%';
-    trackingMetrics.innerHTML = `
+    metricsElement.innerHTML = `
       <div class="metric">
         <span>경유 노드</span>
         <strong>${result.nodes ?? '--'}</strong>
@@ -770,16 +992,17 @@ document.addEventListener('DOMContentLoaded', () => {
     `;
   }
 
-  function renderTrackingTimeline(events) {
-    if (!trackingTimeline) return;
+  function renderTrackingTimeline(timelineElement, events) {
+    if (!timelineElement) return;
     if (!events.length) {
-      trackingTimeline.innerHTML = '<div class="empty-state">우체국 이벤트가 없습니다.</div>';
+      timelineElement.innerHTML = '<div class="empty-state">우체국 이벤트를 불러오면 경로가 시간순으로 나타납니다.</div>';
       return;
     }
-    trackingTimeline.innerHTML = events.map(evt => {
+    timelineElement.innerHTML = events.map(evt => {
       const tags = [];
       if (evt.alias) tags.push(evt.alias);
       if (evt.countryCode && evt.countryCode !== evt.alias) tags.push(evt.countryCode);
+      if (evt.safetyStatus && evt.safetyStatus !== 'UNKNOWN') tags.push(evt.safetyStatus);
       return `
       <div class="timeline-item">
         <div class="timeline-time">${evt.displayTime}</div>
@@ -793,65 +1016,230 @@ document.addEventListener('DOMContentLoaded', () => {
     }).join('');
   }
 
-  async function runTrackingAnalysis(rawText) {
-    if (!trackingLogInput || !trackingStatus) return;
+  async function runTrackingAnalysisIntl(rawText) {
+    if (!trackingLogInputIntl || !trackingStatusIntl) return;
     const payload = (rawText || '').trim();
     if (!payload) {
-      setTrackingStatus('분석할 이벤트 문자열이 없습니다.', 'error');
+      setTrackingStatus(trackingStatusIntl, '분석할 이벤트 문자열이 없습니다.', 'error');
       return;
     }
     if (state.kernel && typeof state.kernel.analyzeTracking === 'function') {
       try {
         const result = JSON.parse(state.kernel.analyzeTracking(payload));
-        renderTrackingMetrics(result);
-        setTrackingStatus(`분석 완료: EDI ${result.idiotScore?.toFixed ? result.idiotScore.toFixed(1) : '--'}`, 'success');
+        renderTrackingMetrics(trackingMetricsIntl, result);
+        setTrackingStatus(trackingStatusIntl, `분석 완료: EDI ${result.idiotScore?.toFixed ? result.idiotScore.toFixed(1) : '--'}`, 'success');
       } catch (err) {
-        setTrackingStatus('분석 실패: ' + err.message, 'error');
+        setTrackingStatus(trackingStatusIntl, '분석 실패: ' + err.message, 'error');
       }
       return;
     }
     if (state.nativeMode) {
       try {
-        setTrackingStatus('서버 분석 중...');
+        setTrackingStatus(trackingStatusIntl, '서버 분석 중...');
         const result = await analyzeTrackingNative(payload);
-        renderTrackingMetrics(result);
-        setTrackingStatus(`분석 완료: EDI ${result.idiotScore?.toFixed ? result.idiotScore.toFixed(1) : '--'}`, 'success');
+        renderTrackingMetrics(trackingMetricsIntl, result);
+        setTrackingStatus(trackingStatusIntl, `분석 완료: EDI ${result.idiotScore?.toFixed ? result.idiotScore.toFixed(1) : '--'}`, 'success');
       } catch (err) {
-        setTrackingStatus('분석 실패: ' + err.message, 'error');
+        setTrackingStatus(trackingStatusIntl, '분석 실패: ' + err.message, 'error');
       }
       return;
     }
-    setTrackingStatus(getWasmUnavailableMessage(), 'error');
+    setTrackingStatus(trackingStatusIntl, getWasmUnavailableMessage(), 'error');
   }
 
-  async function handleTrackingFetch() {
-    if (!trackingNumberInput) return;
-    const invoice = trackingNumberInput.value.trim();
+  async function handleTrackingFetchIntl() {
+    if (!trackingNumberInputIntl) return;
+    const invoice = trackingNumberInputIntl.value.trim();
     if (!invoice) {
-      setTrackingStatus('송장번호를 입력하세요.', 'error');
-      trackingNumberInput.focus();
+      setTrackingStatus(trackingStatusIntl, '송장번호를 입력하세요.', 'error');
+      trackingNumberInputIntl.focus();
       return;
     }
     const carriers = resolveKoreaPostCarriers(invoice);
     const carrierLabels = carriers.map(c => c.label).join(', ');
-    setTrackingStatus(`한국 우체국 (${carrierLabels})에서 조회 중...`);
+    setTrackingStatus(trackingStatusIntl, `한국 우체국 (${carrierLabels})에서 조회 중...`);
     try {
-      const rawEvents = await fetchTrackingEvents(invoice, carriers);
+      const rawEvents = await fetchTrackingEventsIntl(invoice, carriers);
       const events = enrichTrackingEvents(rawEvents);
-      state.trackingEvents = events;
+      state.trackingEventsIntl = events;
       if (!events.length) {
-        setTrackingStatus('파싱 가능한 공항 이벤트를 찾지 못했습니다. 로그를 직접 붙여넣어 주세요.', 'error');
-        renderTrackingTimeline([]);
+        setTrackingStatus(trackingStatusIntl, '파싱 가능한 공항 이벤트를 찾지 못했습니다. 로그를 직접 붙여넣어 주세요.', 'error');
+        renderTrackingTimeline(trackingTimelineIntl, []);
         return;
       }
-      renderTrackingTimeline(events);
+      renderTrackingTimeline(trackingTimelineIntl, events);
       const payload = buildTrackingPayload(events);
-      if (trackingLogInput) trackingLogInput.value = payload;
-      await runTrackingAnalysis(payload);
+      if (trackingLogInputIntl) trackingLogInputIntl.value = payload;
+      await runTrackingAnalysisIntl(payload);
     } catch (err) {
-      setTrackingStatus(err.message || '조회 실패', 'error');
-      renderTrackingTimeline([]);
+      setTrackingStatus(trackingStatusIntl, err.message || '조회 실패', 'error');
+      renderTrackingTimeline(trackingTimelineIntl, []);
     }
+  }
+
+  // --- Domestic Tracking Fetch and Display ---
+
+  async function fetchDomesticTrackingEvents(invoice, carrierId) {
+      if (!carrierId) throw new Error('택배사 ID를 선택하거나 자동 감지해 주세요.');
+      const endpoint = `${TRACKER_DELIVERY_API}/carriers/${carrierId}/tracks/${encodeURIComponent(invoice)}`;
+      try {
+          const headers = { 'Accept': 'application/json' };
+          if (TRACKER_API_KEY) {
+              headers['X-Tracker-API-Key'] = TRACKER_API_KEY;
+          }
+          const response = await fetch(endpoint, {
+              headers,
+              mode: 'cors'
+          });
+          const rawBody = await response.text();
+          if (!response.ok) {
+              let detail = '';
+              try {
+                  const parsed = rawBody ? JSON.parse(rawBody) : null;
+                  detail = parsed?.message || '';
+              } catch (_) {
+                  detail = rawBody?.trim();
+              }
+              throw new Error(detail ? `HTTP ${response.status} ${detail}` : `HTTP ${response.status}`);
+          }
+          let data = {};
+          try {
+              data = rawBody ? JSON.parse(rawBody) : {};
+          } catch (err) {
+              throw new Error('JSON 파싱 실패');
+          }
+
+          const progresses = Array.isArray(data?.progresses) ? data.progresses : [];
+          if (!progresses.length && !data.state) {
+              throw new Error('진행 이벤트 또는 상태 정보가 비어 있습니다.');
+          }
+          return data;
+      } catch (err) {
+          throw new Error(`배송조회 API에 연결하지 못했습니다. ${err.message}`);
+      }
+  }
+
+  async function handleDomesticTrackingFetch() {
+      if (!trackingNumberInputDomestic) return;
+      const invoice = trackingNumberInputDomestic.value.trim();
+      if (!invoice) {
+          setTrackingStatus(trackingStatusDomestic, '송장번호를 입력하세요.', 'error');
+          trackingNumberInputDomestic.focus();
+          return;
+      }
+
+      let selectedCarrierId = carrierSelectDomestic.value;
+
+      if (!selectedCarrierId) {
+          const detectedCarriers = resolveDomesticCarriers(invoice);
+          if (detectedCarriers.length === 1) {
+              selectedCarrierId = detectedCarriers[0].id;
+              carrierSelectDomestic.value = selectedCarriers[0].id;
+              setTrackingStatus(trackingStatusDomestic, `택배사 자동 감지: ${detectedCarriers[0].label}`, 'info');
+          } else if (detectedCarriers.length > 1) {
+              const carrierLabels = detectedCarriers.map(c => c.label).join(', ');
+              setTrackingStatus(trackingStatusDomestic, `여러 택배사가 감지되었습니다 (${carrierLabels}). 직접 선택해 주세요.`, 'info');
+              carrierSelectDomestic.value = '';
+              return;
+          } else {
+              setTrackingStatus(trackingStatusDomestic, '택배사를 자동 감지할 수 없습니다. 직접 선택해 주세요.', 'error');
+              return;
+          }
+      }
+
+      setTrackingStatus(trackingStatusDomestic, `"${selectedCarrierId}"에서 조회 중...`);
+      try {
+          const data = await fetchDomesticTrackingEvents(invoice, selectedCarrierId);
+          if (trackingLogInputDomestic) trackingLogInputDomestic.value = JSON.stringify(data, null, 2);
+
+          const progresses = Array.isArray(data?.progresses) ? data.progresses : [];
+          const enrichedEvents = enrichTrackingEvents(progresses);
+          state.domesticTrackingEvents = enrichedEvents;
+
+          if (!enrichedEvents.length) {
+              if (data.state?.text) {
+                  setTrackingStatus(trackingStatusDomestic, `조회 완료: ${data.state.text}`, 'success');
+              } else {
+                  setTrackingStatus(trackingStatusDomestic, '진행 이벤트를 찾지 못했습니다.', 'error');
+              }
+              renderTrackingTimeline(trackingTimelineDomestic, []);
+              if (trackingMetricsDomestic) trackingMetricsDomestic.innerHTML = '<div class="empty-state">분석 결과가 없습니다.</div>';
+              return;
+          }
+
+          renderTrackingTimeline(trackingTimelineDomestic, enrichedEvents);
+
+          const fromName = data.from?.name || '알 수 없음';
+          const toName = data.to?.name || '알 수 없음';
+          const currentState = data.state?.text || '정보 없음';
+
+          let orsDistanceHtml = '';
+          const startEvent = enrichedEvents.find(e => e.lat != null && e.lon != null);
+          const endEvent = enrichedEvents.reverse().find(e => e.lat != null && e.lon != null); // Find last valid event
+
+          if (startEvent && endEvent && startEvent !== endEvent) {
+            try {
+                const orsRoute = await fetchORSPath(
+                    { lat: startEvent.lat, lon: startEvent.lon },
+                    { lat: endEvent.lat, lon: endEvent.lon }
+                );
+                if (orsRoute) {
+                    updateORSMapRoute(mainMapLibre, orsRoute.geojson);
+                    if (modalMapLibre) {
+                        updateORSMapRoute(modalMapLibre, orsRoute.geojson);
+                    }
+                    orsDistanceHtml = `
+                        <div class="metric">
+                            <span>도로 최단거리</span>
+                            <strong>${(orsRoute.distance / 1000).toFixed(1)} km</strong>
+                        </div>
+                    `;
+                } else {
+                    updateORSMapRoute(mainMapLibre, null); // Clear previous route
+                    if (modalMapLibre) {
+                        updateORSMapRoute(modalMapLibre, null);
+                    }
+                }
+            } catch (orsErr) {
+                console.warn('Failed to fetch ORS path for domestic tracking:', orsErr);
+                orsDistanceHtml = `
+                    <div class="metric">
+                        <span>도로 최단거리</span>
+                        <strong>조회 불가</strong>
+                    </div>
+                `;
+            }
+          } else {
+            updateORSMapRoute(mainMapLibre, null); // Clear previous route
+            if (modalMapLibre) {
+                updateORSMapRoute(modalMapLibre, null);
+            }
+          }
+
+          const metricsHtml = `
+              <div class="metric">
+                  <span>보내는 분</span>
+                  <strong>${fromName}</strong>
+              </div>
+              <div class="metric">
+                  <span>받는 분</span>
+                  <strong>${toName}</strong>
+              </div>
+              <div class="metric">
+                  <span>현재 상태</span>
+                  <strong>${currentState}</strong>
+              </div>
+              ${orsDistanceHtml}
+          `;
+          if (trackingMetricsDomestic) trackingMetricsDomestic.innerHTML = metricsHtml;
+
+          setTrackingStatus(trackingStatusDomestic, `조회 완료: ${currentState}`, 'success');
+
+      } catch (err) {
+          setTrackingStatus(trackingStatusDomestic, err.message || '조회 실패', 'error');
+          renderTrackingTimeline(trackingTimelineDomestic, []);
+          if (trackingMetricsDomestic) trackingMetricsDomestic.innerHTML = '<div class="empty-state">분석 결과가 없습니다.</div>';
+      }
   }
 
   async function runRouteSearch(from, to, maxTransfers, maxResults) {
@@ -887,135 +1275,54 @@ document.addEventListener('DOMContentLoaded', () => {
       state.routes = paths;
       resultsEl.innerHTML = paths.length ? paths.map((p, i) => `
         <div class="result-card">
-          <h3>경로 ${i + 1}: ${p.airports.map(a => a.code).join(' → ')}</h3>
+          <h3>경로 ${i + 1}: ${p.nodes.map(n => n.code).join(' → ')}</h3>
           <p>${p.legs}구간 · ${p.totalDistanceKm.toFixed(1)}km · 효율 ${p.efficiency.toFixed(3)}</p>
         </div>
       `).join('') : '<div class="empty-state">경로 없음</div>';
       statusEl.textContent = `분석 완료: ${paths.length}개 발견`;
-      drawAllScenes();
+      updateMapRoutes(mainMapLibre, paths); // Replaced drawAllScenes()
     } catch (err) {
       statusEl.textContent = '오류: ' + err.message;
       resultsEl.innerHTML = `<div class="empty-state">${err.message}</div>`;
     }
   }
 
-  function handleCanvasClick(canvas, e) {
-    if (dragState.blockClick) return;
-    const rect = canvas.getBoundingClientRect();
-    const world = canvasToWorld((e.clientX - rect.left)/rect.width, (e.clientY - rect.top)/rect.height, getViewWindow());
-    const lon = world.u * 360 - 180;
-    const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * world.v)));
-    const lat = latRad * 180 / Math.PI;
-    let best = null, minDist = Infinity;
-    state.airports.forEach(a => {
-      const d = Math.pow(a.lat-lat, 2) + Math.pow(a.lon-lon, 2);
-      if (d < minDist) { minDist = d; best = a; }
-    });
-    if (best) setInputField(state.activeField, best.code);
-  }
-
-  function handlePointerDown(canvas, e) {
-    if (e.button !== 0) return;
-    dragState.active = true; dragState.pointerId = e.pointerId;
-    dragState.lastX = e.clientX; dragState.lastY = e.clientY;
-    dragState.moved = false; dragState.blockClick = false;
-    canvas.setPointerCapture(e.pointerId);
-    canvas.classList.add('dragging');
-  }
-
-  function handlePointerMove(canvas, e) {
-    if (!dragState.active || e.pointerId !== dragState.pointerId) return;
-    const dx = e.clientX - dragState.lastX, dy = e.clientY - dragState.lastY;
-    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) dragState.moved = true;
-    const rect = canvas.getBoundingClientRect();
-    view.centerX -= dx / rect.width / view.zoom;
-    view.centerY -= dy / rect.height / view.zoom;
-    clampViewCenter();
-    dragState.lastX = e.clientX; dragState.lastY = e.clientY;
-    drawAllScenes();
-  }
-
-  function handlePointerUp(canvas, e) {
-    if (e.pointerId !== dragState.pointerId) return;
-    canvas.classList.remove('dragging');
-    dragState.blockClick = dragState.moved;
-    dragState.active = false; dragState.pointerId = null;
-  }
-
-  function handleWheel(e) {
-    e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-    view.zoom = Math.min(view.maxZoom, Math.max(view.minZoom, view.zoom * factor));
-    clampViewCenter();
-    drawAllScenes();
-  }
-
-  // Touch gesture handlers for mobile pinch-to-zoom
-  function getTouchDistance(touch1, touch2) {
-    const dx = touch2.clientX - touch1.clientX;
-    const dy = touch2.clientY - touch1.clientY;
-    return Math.sqrt(dx * dx + dy * dy);
-  }
-
-  function handleTouchStart(canvas, e) {
-    if (!state.isMobile) return;
-    touchState.touches = Array.from(e.touches);
-    if (touchState.touches.length === 2) {
-      e.preventDefault();
-      touchState.initialDistance = getTouchDistance(touchState.touches[0], touchState.touches[1]);
-      touchState.initialZoom = view.zoom;
+  // MapLibre click handler
+  const handleMapClick = (e) => {
+    const features = mainMapLibre.queryRenderedFeatures(e.point, { layers: [MapLayerStyle.NODE_CIRCLE.id] });
+    if (features.length > 0) {
+      const clickedNode = features[0].properties;
+      setInputField(state.activeField, clickedNode.code);
     }
-  }
+  };
 
-  function handleTouchMove(canvas, e) {
-    if (!state.isMobile) return;
-    if (e.touches.length === 2) {
-      e.preventDefault();
-      const currentDistance = getTouchDistance(e.touches[0], e.touches[1]);
-      const scale = currentDistance / touchState.initialDistance;
-      view.zoom = Math.min(view.maxZoom, Math.max(view.minZoom, touchState.initialZoom * scale));
-      clampViewCenter();
-      drawAllScenes();
-    }
-  }
-
-  function handleTouchEnd(canvas, e) {
-    if (!state.isMobile) return;
-    touchState.touches = Array.from(e.touches);
-    if (touchState.touches.length < 2) {
-      touchState.initialDistance = 0;
-      touchState.initialZoom = view.zoom;
-    }
-  }
+  // Replace old canvas event listeners with MapLibre event listeners
+  // These are currently empty, they will be added in the DOMContentLoaded block
 
   function openMapModal() {
     statusBeforeModal = statusEl.textContent;
     mapModal.classList.add('open'); mapModal.setAttribute('aria-hidden', 'false');
-    resizeAllCanvases();
+    if (modalMapLibre) {
+      modalMapLibre.resize();
+      // Sync map view from main map
+      modalMapLibre.jumpTo({
+        center: mainMapLibre.getCenter(),
+        zoom: mainMapLibre.getZoom()
+      });
+      // Sync node states
+      state.nodes.forEach(node => {
+        const selected = (state.selection.from && state.selection.from.code === node.code) ||
+                         (state.selection.to && state.selection.to.code === node.code);
+        modalMapLibre.setFeatureState({source: 'nodes', id: node.code}, {selected: selected});
+      });
+      // Sync routes
+      updateMapRoutes(modalMapLibre, state.routes);
+    }
   }
 
   function closeMapModal() {
     mapModal.classList.remove('open'); mapModal.setAttribute('aria-hidden', 'true');
     statusEl.textContent = statusBeforeModal;
-  }
-
-  [mainCanvas, modalCanvas].forEach(canvas => {
-    canvas.addEventListener('click', (e) => handleCanvasClick(canvas, e));
-    canvas.addEventListener('pointerdown', (e) => handlePointerDown(canvas, e));
-    canvas.addEventListener('pointermove', (e) => handlePointerMove(canvas, e));
-    canvas.addEventListener('pointerup', (e) => handlePointerUp(canvas, e));
-    canvas.addEventListener('wheel', handleWheel, { passive: false });
-    canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); openMapModal(); });
-  });
-
-  function setupTouchGestures() {
-    if (state.isMobile) {
-      [mainCanvas, modalCanvas].forEach(canvas => {
-        canvas.addEventListener('touchstart', (e) => handleTouchStart(canvas, e), { passive: false });
-        canvas.addEventListener('touchmove', (e) => handleTouchMove(canvas, e), { passive: false });
-        canvas.addEventListener('touchend', (e) => handleTouchEnd(canvas, e), { passive: false });
-      });
-    }
   }
 
   modalCloseBtn.addEventListener('click', closeMapModal);
@@ -1026,67 +1333,131 @@ document.addEventListener('DOMContentLoaded', () => {
   mapModeButtons.forEach(b => b.addEventListener('click', () => { mapModeButtons.forEach(x => x.classList.remove('active')); b.classList.add('active'); state.activeField = b.dataset.field; }));
   searchBtn.addEventListener('click', () => { searchRoutes().catch(err => console.error(err)); });
   modeTabs.forEach(tab => tab.addEventListener('click', () => setActivePanel(tab.dataset.modeTab || 'manual')));
-  if (trackingFetchBtn) trackingFetchBtn.addEventListener('click', () => { handleTrackingFetch().catch(err => console.error(err)); });
-  if (trackingAnalyzeBtn && trackingLogInput) trackingAnalyzeBtn.addEventListener('click', () => { runTrackingAnalysis(trackingLogInput.value).catch(err => console.error(err)); });
-  if (trackingNumberInput) {
-    trackingNumberInput.addEventListener('keydown', (e) => {
+  if (trackingFetchBtnIntl) trackingFetchBtnIntl.addEventListener('click', () => { handleTrackingFetchIntl().catch(err => console.error(err)); });
+  if (trackingAnalyzeBtnIntl && trackingLogInputIntl) trackingAnalyzeBtnIntl.addEventListener('click', () => { runTrackingAnalysisIntl(trackingLogInputIntl.value).catch(err => console.error(err)); });
+  if (trackingNumberInputIntl) {
+    trackingNumberInputIntl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        handleTrackingFetch();
+        handleTrackingFetchIntl();
       }
     });
   }
-  window.addEventListener('resize', resizeAllCanvases);
 
-  function renderBestDestinations(container, data) {
-    container.innerHTML = '';
-    container.className = 'best-continent-container';
-    const continents = Object.keys(data);
-    if (!continents.length) {
-      const empty = document.createElement('div');
-      empty.className = 'empty-state';
-      empty.textContent = '목적지를 찾을 수 없습니다.';
-      container.appendChild(empty);
-      return;
-    }
-    continents.forEach(continent => {
-      const group = document.createElement('div');
-      group.className = 'best-continent-group';
-      const header = document.createElement('h3');
-      header.className = 'best-continent-header';
-      header.textContent = continent;
-      group.appendChild(header);
-      const grid = document.createElement('div');
-      grid.className = 'best-grid';
-      data[continent].forEach((dest, i) => {
-        const card = document.createElement('article');
-        card.className = 'best-card-item';
-        const cardHeader = document.createElement('div');
-        cardHeader.className = 'best-card-header';
-        const strong = document.createElement('strong');
-        strong.textContent = '#' + (i + 1) + ' ' + dest.code + (dest.country ? ' (' + dest.country + ')' : '');
-        cardHeader.appendChild(strong);
-        card.appendChild(cardHeader);
-        const body = document.createElement('p');
-        body.textContent = dest.route;
-        card.appendChild(body);
-        const meta = document.createElement('div');
-        meta.className = 'best-meta';
-        const dist = document.createElement('span');
-        dist.textContent = dest.distanceKm.toFixed(0) + ' km';
-        const eff = document.createElement('span');
-        eff.textContent = '효율 ' + (dest.efficiency * 100).toFixed(1) + '%';
-        meta.appendChild(dist);
-        meta.appendChild(eff);
-        card.appendChild(meta);
-        grid.appendChild(card);
+  if (trackingFetchBtnDomestic) trackingFetchBtnDomestic.addEventListener('click', () => { handleDomesticTrackingFetch().catch(err => console.error(err)); });
+  if (trackingNumberInputDomestic) {
+      trackingNumberInputDomestic.addEventListener('input', () => {
+          setTrackingStatus(trackingStatusDomestic, '송장번호를 입력하세요.');
+          const invoice = trackingNumberInputDomestic.value.trim();
+          if (invoice.length >= 10) {
+              const detected = resolveDomesticCarriers(invoice);
+              if (detected.length === 1) {
+                  carrierSelectDomestic.value = detected[0].id;
+                  setTrackingStatus(trackingStatusDomestic, `택배사 자동 감지: ${detected[0].label}`, 'info');
+              } else if (detected.length > 1) {
+                  setTrackingStatus(trackingStatusDomestic, `여러 택배사가 감지되었습니다. 선택하거나 자동 감지를 기다리세요.`, 'info');
+                  carrierSelectDomestic.value = '';
+              } else {
+                  carrierSelectDomestic.value = '';
+                  setTrackingStatus(trackingStatusDomestic, '택배사를 자동 감지할 수 없습니다. 직접 선택해 주세요.', 'info');
+              }
+          } else {
+              carrierSelectDomestic.value = '';
+          }
       });
-      group.appendChild(grid);
-      container.appendChild(group);
-    });
+      trackingNumberInputDomestic.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+              e.preventDefault();
+              handleDomesticTrackingFetch();
+          }
+      });
   }
 
-  function getContinent(lat, lon) {
+  bestFromRefreshBtn.addEventListener('click', () => { requestBestFrom().catch(err => console.error(err)); });
+  bestToRefreshBtn.addEventListener('click', () => { requestBestTo().catch(err => console.error(err)); });
+
+  setActivePanel(state.uiMode || 'manual');
+  window.addEventListener('resize', () => {
+    if (mainMapLibre) mainMapLibre.resize();
+    if (modalMapLibre) modalMapLibre.resize();
+  });
+  
+  // Call init() last
+  init();
+});
+
+async function init() {
+  // Detect mobile device
+  state.isMobile = detectMobile();
+  
+  // Removed setupTouchGestures();
+  
+  await initServiceWorker();
+  const wasmReady = await initWasm();
+  let nativeReady = false;
+  if (!wasmReady) {
+    nativeReady = await enableNativeMode();
+    if (!nativeReady) {
+      applyWasmDisabledUi();
+    }
+  }
+
+  // Initialize MapLibre maps
+  mainMapLibre = initMap('map-container');
+  modalMapLibre = initMap('map-container-large', true);
+
+  if (wasmReady) {
+    try {
+      state.bestWorker = new Worker(assetPaths.workerScript, { type: 'module' });
+      state.bestWorker.onmessage = (e) => {
+        const msg = e.data;
+        if (msg.type === 'init') {
+          if (msg.ok) console.log('Best-destinations worker ready');
+          else console.warn('Best-destinations worker init failed:', msg.error);
+          return;
+        }
+        if (msg.type === 'result') {
+          const fromCode = fromInput.value.trim().toUpperCase();
+          const toCode = toInput.value.trim().toUpperCase();
+          if (msg.originCode === fromCode) {
+            renderBestDestinations(bestFromResults, msg.data);
+            bestFromResults.classList.remove('loading');
+          }
+          if (msg.originCode === toCode) {
+            renderBestDestinations(bestToResults, msg.data);
+            bestToResults.classList.remove('loading');
+          }
+          return;
+        }
+        if (msg.type === 'error') {
+          console.warn('Best-destinations worker error:', msg.error);
+        }
+      };
+      state.bestWorker.postMessage({ type: 'compute_init', nodes: state.nodes }); // Pass nodes to worker
+    } catch (err) {
+      console.warn('Web Worker not available:', err);
+    }
+  }
+
+  if (wasmReady && state.kernel) {
+    const h = JSON.parse(state.kernel.getHealth());
+    statRoutes.textContent = h.routes_loaded.toLocaleString();
+    statWorkers.textContent = 'WASM-Serverless';
+  } else if (state.nativeMode && state.nativeHealth) {
+    if (statRoutes && typeof state.nativeHealth.routes_loaded === 'number') {
+      statRoutes.textContent = h.routes_loaded.toLocaleString();
+    }
+  } else if (statRoutes) {
+    statRoutes.textContent = '--';
+  }
+}
+
+// Global functions that use state.nodes/nodeMap (renamed from airports/airportMap)
+
+function getContinent(lat, lon) {
+    // These values define approximate bounding boxes for continents.
+    // They are not perfectly accurate and some regions may overlap or be excluded.
+    // This function is for heuristic purposes in best-destination calculation only.
     if (lat >= 7 && lat <= 84 && lon >= -170 && lon <= -50) return '북미';
     if (lat < 7 && lat >= -60 && lon >= -100 && lon <= -30) return '남미';
     if (lat < -15 && lon >= 100 && lon <= 180) return '오세아니아';
@@ -1096,199 +1467,199 @@ document.addEventListener('DOMContentLoaded', () => {
     if (lat >= -15 && lon > 55 && lon <= 180) return '아시아';
     if (lat >= 5 && lon >= 25 && lon <= 180) return '아시아';
     return '기타';
-  }
+}
 
-  function haversineKm(lat1, lon1, lat2, lon2) {
+function haversineKm(lat1, lon1, lat2, lon2) {
     const R = 6371.0;
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
     const a = Math.sin(dLat / 2) ** 2 +
-      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-      Math.sin(dLon / 2) ** 2;
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Hardcoded route restrictions (mirrors server-side logistics_restrictions)
+const ROUTE_RESTRICTIONS = [
+  { origin: 'ICN', destination: 'FNJ' },
+  { origin: 'FNJ', destination: 'ICN' },
+  { origin: 'SVO', destination: 'KBP' },
+  { origin: 'KBP', destination: 'SVO' }
+];
+
+function getForbiddenCountries(originCode) {
+  const countries = new Set();
+  for (const rule of ROUTE_RESTRICTIONS) {
+    if (rule.origin !== originCode) continue;
+    const dest = state.nodeMap.get(rule.destination); // Renamed from airportMap
+    if (dest && dest.country) countries.add(dest.country);
+  }
+  return countries;
+}
+
+async function computeBestDestinationsLocal(originCode, continentFilter) {
+  if (!state.kernel || state.nodes.length === 0) return {}; // Renamed from airports
+  const origin = state.nodeMap.get(originCode); // Renamed from airportMap
+  if (!origin) return {};
+  const filterContinent = continentFilter || getContinent(origin.lat, origin.lon);
+  const originCountry = origin.country || '';
+  const forbiddenCountries = getForbiddenCountries(originCode);
+
+  // --- Tier 1: Spatial filtering (500km / 1000km bounding box) ---
+  const tier1Near = [];
+  const tier1Far = [];
+  for (const n of state.nodes) { // Renamed from airports
+    if (n.code === originCode) continue;
+    if (getContinent(n.lat, n.lon) !== filterContinent) continue;
+    // Skip domestic (same-country) destinations
+    if (originCountry && n.country && n.country === originCountry) continue;
+    // Skip destinations in forbidden countries
+    if (n.country && forbiddenCountries.has(n.country)) continue;
+    const dist = haversineKm(origin.lat, origin.lon, n.lat, n.lon);
+    if (dist <= 500) tier1Near.push(n);
+    else if (dist <= 1000) tier1Far.push(n);
   }
 
-  // Hardcoded route restrictions (mirrors server-side logistics_restrictions)
-  const ROUTE_RESTRICTIONS = [
-    { origin: 'ICN', destination: 'FNJ' },
-    { origin: 'FNJ', destination: 'ICN' },
-    { origin: 'SVO', destination: 'KBP' },
-    { origin: 'KBP', destination: 'SVO' }
-  ];
-
-  function getForbiddenCountries(originCode) {
-    const countries = new Set();
-    for (const rule of ROUTE_RESTRICTIONS) {
-      if (rule.origin !== originCode) continue;
-      const dest = state.airportMap.get(rule.destination);
-      if (dest && dest.country) countries.add(dest.country);
-    }
-    return countries;
-  }
-
-  function computeBestDestinationsLocal(originCode, continentFilter) {
-    if (!state.kernel || state.airports.length === 0) return {};
-    const origin = state.airportMap.get(originCode);
-    if (!origin) return {};
-    const filterContinent = continentFilter || getContinent(origin.lat, origin.lon);
-    const originCountry = origin.country || '';
-    const forbiddenCountries = getForbiddenCountries(originCode);
-
-    // --- Tier 1: Spatial filtering (500km / 1000km bounding box) ---
-    const tier1Near = [];
-    const tier1Far = [];
-    for (const a of state.airports) {
-      if (a.code === originCode) continue;
-      if (getContinent(a.lat, a.lon) !== filterContinent) continue;
-      // Skip domestic (same-country) destinations
-      if (originCountry && a.country && a.country === originCountry) continue;
-      // Skip destinations in forbidden countries
-      if (a.country && forbiddenCountries.has(a.country)) continue;
-      const dist = haversineKm(origin.lat, origin.lon, a.lat, a.lon);
-      if (dist <= 500) tier1Near.push(a);
-      else if (dist <= 1000) tier1Far.push(a);
-    }
-
-    // --- Tier 2: Hub-to-hub direct flights ---
-    const tier2Hubs = [];
-    if (state.kernel.getDirectDests) {
-      try {
-        const directData = JSON.parse(state.kernel.getDirectDests(originCode));
-        const directDests = directData.destinations || [];
-        const HUB_MIN_CONNECTIONS = 30;
-        for (const d of directDests) {
-          if (getContinent(d.lat, d.lon) !== filterContinent) continue;
-          // Skip domestic (same-country) destinations
-          const existing = state.airportMap.get(d.code);
-          const destCountry = d.country || existing?.country || '';
-          if (originCountry && destCountry && destCountry === originCountry) continue;
-          // Skip destinations in forbidden countries
-          if (destCountry && forbiddenCountries.has(destCountry)) continue;
-          if (d.connections >= HUB_MIN_CONNECTIONS) {
-            if (existing) tier2Hubs.push(existing);
-          }
-        }
-      } catch { /* skip */ }
-    }
-
-    // --- Merge and deduplicate ---
-    const seen = new Set();
-    const candidates = [];
-    for (const list of [tier1Near, tier2Hubs, tier1Far]) {
-      for (const a of list) {
-        if (!seen.has(a.code)) {
-          seen.add(a.code);
-          candidates.push(a);
-        }
-      }
-    }
-
-    if (candidates.length < 20) {
-      const remaining = state.airports.filter(a => {
-        if (a.code === originCode || seen.has(a.code)) return false;
-        // Skip domestic (same-country) destinations
-        if (originCountry && a.country && a.country === originCountry) return false;
-        // Skip destinations in forbidden countries
-        if (a.country && forbiddenCountries.has(a.country)) return false;
-        return getContinent(a.lat, a.lon) === filterContinent;
-      });
-      for (const a of remaining) {
-        if (!seen.has(a.code)) {
-          seen.add(a.code);
-          candidates.push(a);
-        }
-        if (candidates.length >= 200) break;
-      }
-    }
-
-    const sample = candidates.length > 200 ? candidates.slice(0, 200) : candidates;
-
-    // --- Search and score with country-unique top 5 ---
-    const seenCountries = new Set();
-    const continentResults = {};
-    const MAX_COUNTRIES = 5;
-
-    for (const dest of sample) {
-      if (seenCountries.size >= MAX_COUNTRIES) break;
-
-      const destCountry = dest.country || '';
-
-      // Skip domestic (same-country) destinations
-      if (originCountry && destCountry && destCountry === originCountry) continue;
-
-      if (destCountry && seenCountries.has(destCountry)) continue;
-
-      try {
-        const result = JSON.parse(state.kernel.searchRoutes(originCode, dest.code, 2));
-        if (!result.paths || !result.paths.length) continue;
-        const path = result.paths[0];
-        const dist = path.totalDistanceKm;
-        const efficiency = path.efficiency;
-        const reliability = efficiency * 100;
-        const score = (reliability / (dist + 1)) * 1000;
-
-        const continent = getContinent(dest.lat, dest.lon);
-        if (!continentResults[continent]) continentResults[continent] = [];
-        continentResults[continent].push({
-          code: dest.code,
-          lat: dest.lat,
-          lon: dest.lon,
-          country: destCountry,
-          distanceKm: dist,
-          efficiency: efficiency,
-          score: score,
-          hops: path.hops || path.legs || 0,
-          route: path.airports ? path.airports.map(a => a.code).join(' → ') : originCode + ' → ' + dest.code
-        });
-
-        if (destCountry) seenCountries.add(destCountry);
-      } catch { /* skip */ }
-    }
-
-    for (const continent of Object.keys(continentResults)) {
-      continentResults[continent].sort((a, b) => b.score - a.score);
-      const unique = [];
-      const countrySeen = new Set();
-      for (const item of continentResults[continent]) {
-        const c = item.country || item.code;
-        if (countrySeen.has(c)) continue;
-        countrySeen.add(c);
-        unique.push(item);
-        if (unique.length >= 5) break;
-      }
-      continentResults[continent] = unique;
-    }
-    return continentResults;
-  }
-
-  async function computeBestDestinationsNative(originCode, continentFilter) {
-    if (!state.nativeMode || state.airports.length === 0) return {};
-    const origin = state.airportMap.get(originCode);
-    if (!origin) return {};
-    const filterContinent = continentFilter || getContinent(origin.lat, origin.lon);
-    const originCountry = origin.country || '';
-    const forbiddenCountries = getForbiddenCountries(originCode);
-
-    const tier1Near = [];
-    const tier1Far = [];
-    for (const a of state.airports) {
-      if (a.code === originCode) continue;
-      if (getContinent(a.lat, a.lon) !== filterContinent) continue;
-      if (originCountry && a.country && a.country === originCountry) continue;
-      if (a.country && forbiddenCountries.has(a.country)) continue;
-      const dist = haversineKm(origin.lat, origin.lon, a.lat, a.lon);
-      if (dist <= 500) tier1Near.push(a);
-      else if (dist <= 1000) tier1Far.push(a);
-    }
-
-    const tier2Hubs = [];
+  // --- Tier 2: Hub-to-hub direct flights ---
+  const tier2Hubs = [];
+  if (state.kernel.getDirectDests) {
     try {
-      const directData = await fetchNativeDirectDestinations(originCode);
-      const directDests = Array.isArray(directData.destinations) ? directData.destinations : [];
+      const directData = JSON.parse(state.kernel.getDirectDests(originCode));
+      const directDests = directData.destinations || [];
       const HUB_MIN_CONNECTIONS = 30;
       for (const d of directDests) {
         if (getContinent(d.lat, d.lon) !== filterContinent) continue;
-        const existing = state.airportMap.get(d.code);
+        // Skip domestic (same-country) destinations
+        const existing = state.nodeMap.get(d.code); // Renamed from airportMap
+        const destCountry = d.country || existing?.country || '';
+        if (originCountry && destCountry && destCountry === originCountry) continue;
+        // Skip destinations in forbidden countries
+        if (destCountry && forbiddenCountries.has(destCountry)) continue;
+        if (d.connections >= HUB_MIN_CONNECTIONS) {
+          if (existing) tier2Hubs.push(existing);
+          else tier2Hubs.push({ code: d.code, lat: d.lat, lon: d.lon, country: destCountry });
+        }
+      }
+    } catch { /* skip */ }
+  }
+
+  // --- Merge and deduplicate ---
+  const seen = new Set();
+  const candidates = [];
+  for (const list of [tier1Near, tier2Hubs, tier1Far]) {
+    for (const n of list) { // Renamed from airports
+      if (!seen.has(n.code)) {
+        seen.add(n.code);
+        candidates.push(n);
+      }
+    }
+  }
+
+  if (candidates.length < 20) {
+    const remaining = state.nodes.filter(n => { // Renamed from airports
+      if (n.code === originCode || seen.has(n.code)) return false;
+      if (originCountry && n.country && n.country === originCountry) return false;
+      if (n.country && forbiddenCountries.has(n.country)) return false;
+      return getContinent(n.lat, n.lon) === filterContinent;
+    });
+    for (const n of remaining) { // Renamed from airports
+      if (!seen.has(n.code)) {
+        seen.add(n.code);
+        candidates.push(n);
+      }
+      if (candidates.length >= 200) break;
+    }
+  }
+
+  const sample = candidates.length > 200 ? candidates.slice(0, 200) : candidates;
+
+  // --- Search and score with country-unique top 5 ---
+  const seenCountries = new Set();
+  const continentResults = {};
+  const MAX_COUNTRIES = 5;
+
+  for (const dest of sample) {
+    if (seenCountries.size >= MAX_COUNTRIES) break;
+
+    const destCountry = dest.country || '';
+
+    // Skip domestic (same-country) destinations
+    if (originCountry && destCountry && destCountry === originCountry) continue;
+
+    if (destCountry && seenCountries.has(destCountry)) continue;
+
+    try {
+      const result = JSON.parse(state.kernel.searchRoutes(originCode, dest.code, 2));
+      if (!result.paths || !result.paths.length) continue;
+      const path = result.paths[0];
+      const dist = path.totalDistanceKm;
+      const efficiency = path.efficiency;
+      const reliability = efficiency * 100;
+      const score = (reliability / (dist + 1)) * 1000;
+
+      const continent = getContinent(dest.lat, dest.lon);
+      if (!continentResults[continent]) continentResults[continent] = [];
+      continentResults[continent].push({
+        code: dest.code,
+        lat: dest.lat,
+        lon: dest.lon,
+        country: destCountry,
+        distanceKm: dist,
+        efficiency: efficiency,
+        score: score,
+        hops: path.nodes ? path.nodes.length - 1 : 0, // Renamed from airports
+        route: path.nodes ? path.nodes.map(n => n.code).join(' → ') : originCode + ' → ' + dest.code // Renamed
+      });
+
+      if (destCountry) seenCountries.add(destCountry);
+    } catch { /* skip */ }
+  }
+
+  for (const continent of Object.keys(continentResults)) {
+    continentResults[continent].sort((a, b) => b.score - a.score);
+    const unique = [];
+    const countrySeen = new Set();
+    for (const item of continentResults[continent]) {
+      const c = item.country || item.code;
+      if (countrySeen.has(c)) continue;
+      countrySeen.add(c);
+      unique.push(item);
+      if (unique.length >= 5) break;
+    }
+    continentResults[continent] = unique;
+  }
+  return continentResults;
+}
+
+async function computeBestDestinationsNative(originCode, continentFilter) {
+  if (!state.nativeMode || state.nodes.length === 0) return {}; // Renamed from airports
+  const origin = state.nodeMap.get(originCode); // Renamed from airportMap
+  if (!origin) return {};
+  const filterContinent = continentFilter || getContinent(origin.lat, origin.lon);
+  const originCountry = origin.country || '';
+  const forbiddenCountries = getForbiddenCountries(originCode);
+
+  const tier1Near = [];
+  const tier1Far = [];
+  for (const n of state.nodes) { // Renamed from airports
+    if (n.code === originCode) continue;
+    if (getContinent(n.lat, n.lon) !== filterContinent) continue;
+    if (originCountry && n.country && n.country === originCountry) continue;
+    if (n.country && forbiddenCountries.has(n.country)) continue;
+    const dist = haversineKm(origin.lat, origin.lon, n.lat, n.lon);
+    if (dist <= 500) tier1Near.push(n);
+    else if (dist <= 1000) tier1Far.push(n);
+  }
+
+  const tier2Hubs = [];
+  if (state.kernel.getDirectDests) {
+    try {
+      const directData = JSON.parse(state.kernel.getDirectDests(originCode));
+      const directDests = directData.destinations || [];
+      const HUB_MIN_CONNECTIONS = 30;
+      for (const d of directDests) {
+        if (getContinent(d.lat, d.lon) !== filterContinent) continue;
+        const existing = state.nodeMap.get(d.code); // Renamed from airportMap
         const destCountry = d.country || existing?.country || '';
         if (originCountry && destCountry && destCountry === originCountry) continue;
         if (destCountry && forbiddenCountries.has(destCountry)) continue;
@@ -1300,220 +1671,212 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (err) {
       console.warn('Direct destinations unavailable:', err);
     }
+  }
 
-    const seen = new Set();
-    const candidates = [];
-    for (const list of [tier1Near, tier2Hubs, tier1Far]) {
-      for (const a of list) {
-        if (!seen.has(a.code)) {
-          seen.add(a.code);
-          candidates.push(a);
-        }
+  const seen = new Set();
+  const candidates = [];
+  for (const list of [tier1Near, tier2Hubs, tier1Far]) {
+    for (const n of list) { // Renamed from airports
+      if (!seen.has(n.code)) {
+        seen.add(n.code);
+        candidates.push(n);
       }
     }
+  }
 
-    if (candidates.length < 20) {
-      const remaining = state.airports.filter(a => {
-        if (a.code === originCode || seen.has(a.code)) return false;
-        if (originCountry && a.country && a.country === originCountry) return false;
-        if (a.country && forbiddenCountries.has(a.country)) return false;
-        return getContinent(a.lat, a.lon) === filterContinent;
+  if (candidates.length < 20) {
+    const remaining = state.nodes.filter(n => { // Renamed from airports
+      if (n.code === originCode || seen.has(n.code)) return false;
+      if (originCountry && n.country && n.country === originCountry) return false;
+      if (n.country && forbiddenCountries.has(n.country)) return false;
+      return getContinent(n.lat, n.lon) === filterContinent;
+    });
+    for (const n of remaining) { // Renamed from airports
+      if (!seen.has(n.code)) {
+        seen.add(n.code);
+        candidates.push(n);
+      }
+      if (candidates.length >= 200) break;
+    }
+  }
+
+  const sample = candidates.length > 200 ? candidates.slice(0, 200) : candidates;
+  const continentResults = {};
+  const seenCountries = new Set();
+  const MAX_COUNTRIES = 5;
+
+  for (const dest of sample) {
+    if (seenCountries.size >= MAX_COUNTRIES) break;
+    const destCountry = dest.country || '';
+    if (originCountry && destCountry && destCountry === originCountry) continue;
+    if (destCountry && seenCountries.has(destCountry)) continue;
+    try {
+      const result = await runRouteSearch(originCode, dest.code, 2, 1);
+      if (!result.paths || !result.paths.length) continue;
+      const path = result.paths[0];
+      const dist = path.totalDistanceKm;
+      const efficiency = path.efficiency;
+      const reliability = efficiency * 100;
+      const score = (reliability / (dist + 1)) * 1000;
+      const continent = getContinent(dest.lat, dest.lon);
+      if (!continentResults[continent]) continentResults[continent] = [];
+      continentResults[continent].push({
+        code: dest.code,
+        lat: dest.lat,
+        lon: dest.lon,
+        country: destCountry,
+        distanceKm: dist,
+        efficiency: efficiency,
+        score: score,
+        hops: path.nodes ? path.nodes.length - 1 : 0, // Renamed from airports
+        route: path.nodes ? path.nodes.map(n => n.code).join(' → ') : originCode + ' → ' + dest.code // Renamed
       });
-      for (const a of remaining) {
-        if (!seen.has(a.code)) {
-          seen.add(a.code);
-          candidates.push(a);
+      if (destCountry) seenCountries.add(destCountry);
+    } catch (err) {
+      // Ignore failures for individual destinations
+    }
+  }
+
+  for (const continent of Object.keys(continentResults)) {
+    continentResults[continent].sort((a, b) => b.score - a.score);
+    const unique = [];
+    const countrySeen = new Set();
+    for (const item of continentResults[continent]) {
+      const c = item.country || item.code;
+      if (countrySeen.has(c)) continue;
+      countrySeen.add(c);
+      unique.push(item);
+      if (unique.length >= 5) break;
+    }
+    continentResults[continent] = unique;
+  }
+  return continentResults;
+}
+
+async function computeBestDestinations(originCode, continentFilter) {
+  if (state.kernel) {
+    return computeBestDestinationsLocal(originCode, continentFilter);
+  }
+  if (state.nativeMode) {
+    return computeBestDestinationsNative(originCode, continentFilter);
+  }
+  throw new Error(getWasmUnavailableMessage('경로 엔진이 준비되지 않았습니다.'));
+}
+
+async function requestBestFrom() {
+  const fromCode = fromInput.value.trim().toUpperCase();
+  if (fromCode.length !== 3 || !state.nodeMap.has(fromCode)) {
+    bestFromResults.innerHTML = '<div class="empty-state">유효한 3자리 IATA 코드를 입력하세요.</div>';
+    return;
+  }
+  const continent = bestFromContinentSelect ? bestFromContinentSelect.value : '';
+  const origin = state.nodeMap.get(fromCode);
+  const label = continent || (origin ? getContinent(origin.lat, origin.lon) : '');
+  bestFromTitle.textContent = fromCode + '에서 최적 목적지' + (label ? ' (' + label + ')' : '');
+  bestFromResults.classList.add('loading');
+  bestFromResults.innerHTML = '<div class="empty-state">계산 중...</div>';
+  if (state.bestWorker) {
+    const nodes = state.nodes.map(n => ({ code: n.code, lat: n.lat, lon: n.lon, country: n.country || '', layer: n.layer }));
+    state.bestRequestId++;
+    state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: fromCode, nodes, continent });
+  } else {
+    try {
+      const data = await computeBestDestinations(fromCode, continent);
+      renderBestDestinations(bestFromResults, data);
+    } catch (err) {
+      bestFromResults.innerHTML = `<div class="empty-state">${err.message}</div>`;
+    }
+    bestFromResults.classList.remove('loading');
+  }
+}
+
+async function requestBestTo() {
+  const toCode = toInput.value.trim().toUpperCase();
+  if (toCode.length !== 3 || !state.nodeMap.has(toCode)) {
+    bestToResults.innerHTML = '<div class="empty-state">유효한 3자리 IATA 코드를 입력하세요.</div>';
+    return;
+  }
+  const continent = bestToContinentSelect ? bestToContinentSelect.value : '';
+  const origin = state.nodeMap.get(toCode);
+  const label = continent || (origin ? getContinent(origin.lat, origin.lon) : '');
+  bestToTitle.textContent = toCode + '에서 최적 목적지' + (label ? ' (' + label + ')' : '');
+  bestToResults.classList.add('loading');
+  bestToResults.innerHTML = '<div class="empty-state">계산 중...</div>';
+  if (state.bestWorker) {
+    const nodes = state.nodes.map(n => ({ code: n.code, lat: n.lat, lon: n.lon, country: n.country || '', layer: n.layer }));
+    state.bestRequestId++;
+    state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: toCode, nodes, continent });
+  } else {
+    try {
+      const data = await computeBestDestinations(toCode, continent);
+      renderBestDestinations(bestToResults, data);
+    } catch (err) {
+      bestToResults.innerHTML = `<div class="empty-state">${err.message}</div>`;
+    }
+    bestToResults.classList.remove('loading');
+  }
+}
+
+async function init() {
+  // Detect mobile device
+  state.isMobile = detectMobile();
+  
+  await initServiceWorker();
+  const wasmReady = await initWasm();
+  let nativeReady = false;
+  if (!wasmReady) {
+    nativeReady = await enableNativeMode();
+    if (!nativeReady) {
+      applyWasmDisabledUi();
+    }
+  }
+
+  // Initialize MapLibre maps
+  mainMapLibre = initMap('map-container');
+  modalMapLibre = initMap('map-container-large', true);
+
+  if (wasmReady) {
+    try {
+      state.bestWorker = new Worker(assetPaths.workerScript, { type: 'module' });
+      state.bestWorker.onmessage = (e) => {
+        const msg = e.data;
+        if (msg.type === 'init') {
+          if (msg.ok) console.log('Best-destinations worker ready');
+          else console.warn('Best-destinations worker init failed:', msg.error);
+          return;
         }
-        if (candidates.length >= 200) break;
-      }
-    }
-
-    const sample = candidates.length > 200 ? candidates.slice(0, 200) : candidates;
-    const continentResults = {};
-    const seenCountries = new Set();
-    const MAX_COUNTRIES = 5;
-
-    for (const dest of sample) {
-      if (seenCountries.size >= MAX_COUNTRIES) break;
-      const destCountry = dest.country || '';
-      if (originCountry && destCountry && destCountry === originCountry) continue;
-      if (destCountry && seenCountries.has(destCountry)) continue;
-      try {
-        const result = await runRouteSearch(originCode, dest.code, 2, 1);
-        if (!result.paths || !result.paths.length) continue;
-        const path = result.paths[0];
-        const dist = path.totalDistanceKm;
-        const efficiency = path.efficiency;
-        const reliability = efficiency * 100;
-        const score = (reliability / (dist + 1)) * 1000;
-        const continent = getContinent(dest.lat, dest.lon);
-        if (!continentResults[continent]) continentResults[continent] = [];
-        continentResults[continent].push({
-          code: dest.code,
-          lat: dest.lat,
-          lon: dest.lon,
-          country: destCountry,
-          distanceKm: dist,
-          efficiency: efficiency,
-          score: score,
-          hops: path.hops || path.legs || 0,
-          route: path.airports ? path.airports.map(a => a.code).join(' → ') : originCode + ' → ' + dest.code
-        });
-        if (destCountry) seenCountries.add(destCountry);
-      } catch (err) {
-        // Ignore failures for individual destinations
-      }
-    }
-
-    for (const continent of Object.keys(continentResults)) {
-      continentResults[continent].sort((a, b) => b.score - a.score);
-      const unique = [];
-      const countrySeen = new Set();
-      for (const item of continentResults[continent]) {
-        const c = item.country || item.code;
-        if (countrySeen.has(c)) continue;
-        countrySeen.add(c);
-        unique.push(item);
-        if (unique.length >= 5) break;
-      }
-      continentResults[continent] = unique;
-    }
-    return continentResults;
-  }
-
-  async function computeBestDestinations(originCode, continentFilter) {
-    if (state.kernel) {
-      return computeBestDestinationsLocal(originCode, continentFilter);
-    }
-    if (state.nativeMode) {
-      return computeBestDestinationsNative(originCode, continentFilter);
-    }
-    throw new Error(getWasmUnavailableMessage('경로 엔진이 준비되지 않았습니다.'));
-  }
-
-  async function requestBestFrom() {
-    const fromCode = fromInput.value.trim().toUpperCase();
-    if (fromCode.length !== 3 || !state.airportMap.has(fromCode)) {
-      bestFromResults.innerHTML = '<div class="empty-state">유효한 3자리 IATA 코드를 입력하세요.</div>';
-      return;
-    }
-    const continent = bestFromContinentSelect ? bestFromContinentSelect.value : '';
-    const origin = state.airportMap.get(fromCode);
-    const label = continent || (origin ? getContinent(origin.lat, origin.lon) : '');
-    bestFromTitle.textContent = fromCode + '에서 최적 목적지' + (label ? ' (' + label + ')' : '');
-    bestFromResults.classList.add('loading');
-    bestFromResults.innerHTML = '<div class="empty-state">계산 중...</div>';
-    if (state.bestWorker) {
-      const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon, country: a.country || '' }));
-      state.bestRequestId++;
-      state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: fromCode, airports, continent });
-    } else {
-      try {
-        const data = await computeBestDestinations(fromCode, continent);
-        renderBestDestinations(bestFromResults, data);
-      } catch (err) {
-        bestFromResults.innerHTML = `<div class="empty-state">${err.message}</div>`;
-      }
-      bestFromResults.classList.remove('loading');
-    }
-  }
-
-  async function requestBestTo() {
-    const toCode = toInput.value.trim().toUpperCase();
-    if (toCode.length !== 3 || !state.airportMap.has(toCode)) {
-      bestToResults.innerHTML = '<div class="empty-state">유효한 3자리 IATA 코드를 입력하세요.</div>';
-      return;
-    }
-    const continent = bestToContinentSelect ? bestToContinentSelect.value : '';
-    const origin = state.airportMap.get(toCode);
-    const label = continent || (origin ? getContinent(origin.lat, origin.lon) : '');
-    bestToTitle.textContent = toCode + '에서 최적 목적지' + (label ? ' (' + label + ')' : '');
-    bestToResults.classList.add('loading');
-    bestToResults.innerHTML = '<div class="empty-state">계산 중...</div>';
-    if (state.bestWorker) {
-      const airports = state.airports.map(a => ({ code: a.code, lat: a.lat, lon: a.lon, country: a.country || '' }));
-      state.bestRequestId++;
-      state.bestWorker.postMessage({ type: 'compute', id: state.bestRequestId, originCode: toCode, airports, continent });
-    } else {
-      try {
-        const data = await computeBestDestinations(toCode, continent);
-        renderBestDestinations(bestToResults, data);
-      } catch (err) {
-        bestToResults.innerHTML = `<div class="empty-state">${err.message}</div>`;
-      }
-      bestToResults.classList.remove('loading');
-    }
-  }
-
-  async function init() {
-    // Detect mobile device
-    state.isMobile = detectMobile();
-    
-    // Setup touch gestures for mobile devices (must be after mobile detection)
-    setupTouchGestures();
-    
-    await initServiceWorker();
-    const wasmReady = await initWasm();
-    let nativeReady = false;
-    if (!wasmReady) {
-      nativeReady = await enableNativeMode();
-      if (!nativeReady) {
-        applyWasmDisabledUi();
-      }
-    }
-    await fetchAirports();
-
-    if (wasmReady) {
-      // Start the best-destinations Web Worker (separate WASM instance)
-      try {
-        state.bestWorker = new Worker(assetPaths.workerScript, { type: 'module' });
-        state.bestWorker.onmessage = (e) => {
-          const msg = e.data;
-          if (msg.type === 'init') {
-            if (msg.ok) console.log('Best-destinations worker ready');
-            else console.warn('Best-destinations worker init failed:', msg.error);
-            return;
+        if (msg.type === 'result') {
+          const fromCode = fromInput.value.trim().toUpperCase();
+          const toCode = toInput.value.trim().toUpperCase();
+          if (msg.originCode === fromCode) {
+            renderBestDestinations(bestFromResults, msg.data);
+            bestFromResults.classList.remove('loading');
           }
-          if (msg.type === 'result') {
-            const fromCode = fromInput.value.trim().toUpperCase();
-            const toCode = toInput.value.trim().toUpperCase();
-            if (msg.originCode === fromCode) {
-              renderBestDestinations(bestFromResults, msg.data);
-              bestFromResults.classList.remove('loading');
-            }
-            if (msg.originCode === toCode) {
-              renderBestDestinations(bestToResults, msg.data);
-              bestToResults.classList.remove('loading');
-            }
-            return;
+          if (msg.originCode === toCode) {
+            renderBestDestinations(bestToResults, msg.data);
+            bestToResults.classList.remove('loading');
           }
-          if (msg.type === 'error') {
-            console.warn('Best-destinations worker error:', msg.error);
-          }
-        };
-        state.bestWorker.postMessage({ type: 'init' });
-      } catch (err) {
-        console.warn('Web Worker not available:', err);
-      }
+          return;
+        }
+        if (msg.type === 'error') {
+          console.warn('Best-destinations worker error:', msg.error);
+        }
+      };
+      state.bestWorker.postMessage({ type: 'compute_init', nodes: state.nodes }); // Pass nodes to worker
+    } catch (err) {
+      console.warn('Web Worker not available:', err);
     }
+  }
 
-    if (wasmReady && state.kernel) {
-      const h = JSON.parse(state.kernel.getHealth());
+  if (wasmReady && state.kernel) {
+    const h = JSON.parse(state.kernel.getHealth());
+    statRoutes.textContent = h.routes_loaded.toLocaleString();
+    statWorkers.textContent = 'WASM-Serverless';
+  } else if (state.nativeMode && state.nativeHealth) {
+    if (statRoutes && typeof state.nativeHealth.routes_loaded === 'number') {
       statRoutes.textContent = h.routes_loaded.toLocaleString();
-      statWorkers.textContent = 'WASM-Serverless';
-    } else if (state.nativeMode && state.nativeHealth) {
-      if (statRoutes && typeof state.nativeHealth.routes_loaded === 'number') {
-        statRoutes.textContent = state.nativeHealth.routes_loaded.toLocaleString();
-      }
-    } else if (statRoutes) {
-      statRoutes.textContent = '--';
     }
+  } else if (statRoutes) {
+    statRoutes.textContent = '--';
   }
-
-  bestFromRefreshBtn.addEventListener('click', () => { requestBestFrom().catch(err => console.error(err)); });
-  bestToRefreshBtn.addEventListener('click', () => { requestBestTo().catch(err => console.error(err)); });
-
-  setActivePanel(state.uiMode || 'manual');
-  resizeAllCanvases();
-  init();
-});
+}

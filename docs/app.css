@@ -60,26 +60,45 @@ body {
     display: flex;
     flex-wrap: wrap;
     gap: 0.75rem;
-    border-bottom: 1px solid var(--card-border);
-    padding-bottom: 0.5rem;
+    border-bottom: none;
+    padding-bottom: 0;
 }
 
 .mode-tab {
     border: 1px solid var(--card-border);
-    border-bottom: none;
-    border-radius: 12px 12px 0 0;
-    background: linear-gradient(180deg, #f9fafc 0%, #eaedf3 100%);
+    border-radius: 8px; /* Uniform rounded corners */
+    background: var(--card); /* Monotone background */
     color: var(--muted);
     padding: 0.6rem 1.5rem;
     font-weight: 600;
     position: relative;
-    top: 1px;
+    /* Remove top: 1px for body integration */
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+    overflow: hidden; /* To contain the accent */
+}
+
+.mode-tab::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 8px; /* Accent line width */
+    height: 8px; /* Accent line height */
+    background: var(--accent);
+    border-bottom-left-radius: 4px; /* Soften accent corner */
+    opacity: 0; /* Hidden by default */
+    transition: opacity 0.2s;
 }
 
 .mode-tab.active {
     background: var(--card);
     color: var(--text);
-    box-shadow: inset 0 -3px 0 var(--accent);
+    box-shadow: none; /* Removed: no underline */
+    border-color: var(--outline); /* Make active tab border more prominent */
+}
+
+.mode-tab.active::before {
+    opacity: 1; /* Make accent visible for active tab */
 }
 
 .panel.hidden {

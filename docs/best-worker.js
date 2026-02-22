@@ -7,7 +7,8 @@
  * --------
  * Main → Worker:
  *   { type: 'init' }                          // load WASM + blob
- *   { type: 'compute', id, originCode, airports }  // run best-destinations
+ *   { type: 'compute', id, originCode, nodes }  // run best-destinations
+ *   { type: 'compute_init', nodes }             // send initial node data to worker (for `compute` calls)
  *
  * Worker → Main:
  *   { type: 'init',    ok: bool, error? }
@@ -16,6 +17,9 @@
  */
 
 let kernel = null;
+let cachedNodes = [];
+let cachedNodeByCode = new Map();
+
 const assetBase = new URL('./', self.location.href);
 const resolveAsset = (path) => new URL(path, assetBase).href;
 
@@ -39,11 +43,11 @@ const ROUTE_RESTRICTIONS = [
   { origin: 'KBP', destination: 'SVO' }
 ];
 
-function getForbiddenCountries(originCode, airportByCode) {
+function getForbiddenCountries(originCode, nodeByCode) { // Changed airportByCode to nodeByCode
   const countries = new Set();
   for (const rule of ROUTE_RESTRICTIONS) {
     if (rule.origin !== originCode) continue;
-    const dest = airportByCode.get(rule.destination);
+    const dest = nodeByCode.get(rule.destination); // Changed airportByCode to nodeByCode
     if (dest && dest.country) countries.add(dest.country);
   }
   return countries;
@@ -82,31 +86,31 @@ async function initKernel() {
   kernel._free(ptr);
 }
 
-function computeBestDestinations(originCode, airports, continentFilter) {
-  if (!kernel || !airports.length) return {};
-  const airportByCode = new Map(airports.map(a => [a.code, a]));
-  const origin = airportByCode.get(originCode);
+function computeBestDestinations(originCode, nodes, continentFilter) { // Changed airports to nodes
+  if (!kernel || !nodes.length) return {};
+  const nodeByCode = new Map(nodes.map(n => [n.code, n])); // Changed airportByCode to nodeByCode, a to n
+  const origin = nodeByCode.get(originCode); // Changed airportByCode to nodeByCode
   if (!origin) return {};
 
   const targetContinent = continentFilter || null;
   const originContinent = getContinent(origin.lat, origin.lon);
   const filterContinent = targetContinent || originContinent;
   const originCountry = origin.country || '';
-  const forbiddenCountries = getForbiddenCountries(originCode, airportByCode);
+  const forbiddenCountries = getForbiddenCountries(originCode, nodeByCode); // Changed airportByCode to nodeByCode
 
   // --- Tier 1: Spatial filtering (bounding box 500km / 1000km) ---
   const tier1Near = [];  // within 500km
   const tier1Far = [];   // within 1000km (cross-continent)
-  for (const a of airports) {
-    if (a.code === originCode) continue;
-    if (getContinent(a.lat, a.lon) !== filterContinent) continue;
+  for (const n of nodes) { // Changed a to n, airports to nodes
+    if (n.code === originCode) continue;
+    if (getContinent(n.lat, n.lon) !== filterContinent) continue;
     // Skip domestic (same-country) destinations
-    if (originCountry && a.country && a.country === originCountry) continue;
+    if (originCountry && n.country && n.country === originCountry) continue;
     // Skip destinations in forbidden countries
-    if (a.country && forbiddenCountries.has(a.country)) continue;
-    const dist = haversineKm(origin.lat, origin.lon, a.lat, a.lon);
-    if (dist <= 500) tier1Near.push(a);
-    else if (dist <= 1000) tier1Far.push(a);
+    if (n.country && forbiddenCountries.has(n.country)) continue;
+    const dist = haversineKm(origin.lat, origin.lon, n.lat, n.lon);
+    if (dist <= 500) tier1Near.push(n);
+    else if (dist <= 1000) tier1Far.push(n);
   }
 
   // --- Tier 2: Hub-to-hub connectivity (direct flights) ---
@@ -118,13 +122,13 @@ function computeBestDestinations(originCode, airports, continentFilter) {
     for (const d of directDests) {
       if (getContinent(d.lat, d.lon) !== filterContinent) continue;
       // Skip domestic (same-country) destinations
-      const destAirport = airportByCode.get(d.code);
-      const destCountry = d.country || destAirport?.country || '';
+      const destNode = nodeByCode.get(d.code); // Changed destAirport to destNode, airportByCode to nodeByCode
+      const destCountry = d.country || destNode?.country || '';
       if (originCountry && destCountry && destCountry === originCountry) continue;
       // Skip destinations in forbidden countries
       if (destCountry && forbiddenCountries.has(destCountry)) continue;
       if (d.connections >= HUB_MIN_CONNECTIONS) {
-        if (destAirport) tier2Hubs.push(destAirport);
+        if (destNode) tier2Hubs.push(destNode); // Changed destAirport to destNode
       }
     }
   } catch { /* skip */ }
@@ -133,28 +137,28 @@ function computeBestDestinations(originCode, airports, continentFilter) {
   const seen = new Set();
   const candidates = [];
   for (const list of [tier1Near, tier2Hubs, tier1Far]) {
-    for (const a of list) {
-      if (!seen.has(a.code)) {
-        seen.add(a.code);
-        candidates.push(a);
+    for (const n of list) { // Changed a to n
+      if (!seen.has(n.code)) {
+        seen.add(n.code);
+        candidates.push(n);
       }
     }
   }
 
   // If too few candidates from tiers, fall back to broader sampling
   if (candidates.length < 20) {
-    const remaining = airports.filter(a => {
-      if (a.code === originCode || seen.has(a.code)) return false;
+    const remaining = nodes.filter(n => { // Changed airports to nodes, a to n
+      if (n.code === originCode || seen.has(n.code)) return false;
       // Skip domestic (same-country) destinations
-      if (originCountry && a.country && a.country === originCountry) return false;
+      if (originCountry && n.country && n.country === originCountry) return false;
       // Skip destinations in forbidden countries
-      if (a.country && forbiddenCountries.has(a.country)) return false;
-      return getContinent(a.lat, a.lon) === filterContinent;
+      if (n.country && forbiddenCountries.has(n.country)) return false;
+      return getContinent(n.lat, n.lon) === filterContinent;
     });
-    for (const a of remaining) {
-      if (!seen.has(a.code)) {
-        seen.add(a.code);
-        candidates.push(a);
+    for (const n of remaining) { // Changed a to n
+      if (!seen.has(n.code)) {
+        seen.add(n.code);
+        candidates.push(n);
       }
       if (candidates.length >= 200) break;
     }
@@ -179,7 +183,7 @@ function computeBestDestinations(originCode, airports, continentFilter) {
     // Skip domestic (same-country) destinations
     if (originCountry && destCountry && destCountry === originCountry) continue;
 
-    // Skip if we already have an airport from this country
+    // Skip if we already have a node from this country
     if (destCountry && seenCountries.has(destCountry)) continue;
 
     try {
@@ -205,7 +209,7 @@ function computeBestDestinations(originCode, airports, continentFilter) {
         efficiency: efficiency,
         score: score,
         hops: path.hops || path.legs || 0,
-        route: path.airports ? path.airports.map(a => a.code).join(' → ') : originCode + ' → ' + dest.code
+        route: path.nodes ? path.nodes.map(n => n.code).join(' → ') : originCode + ' → ' + dest.code // Changed airports to nodes, a to n
       });
 
       if (destCountry) seenCountries.add(destCountry);
@@ -244,9 +248,18 @@ self.onmessage = async (e) => {
     return;
   }
 
+  // New message type to receive initial node data from main thread
+  if (msg.type === 'compute_init') {
+    cachedNodes = msg.nodes;
+    cachedNodeByCode = new Map(cachedNodes.map(n => [n.code, n]));
+    return;
+  }
+
   if (msg.type === 'compute') {
     try {
-      const data = computeBestDestinations(msg.originCode, msg.airports, msg.continent || '');
+      // Use cached nodes if available
+      const nodesToUse = msg.nodes && msg.nodes.length > 0 ? msg.nodes : cachedNodes;
+      const data = computeBestDestinations(msg.originCode, nodesToUse, msg.continent || ''); // Changed airports to nodes
       self.postMessage({ type: 'result', id: msg.id, originCode: msg.originCode, data });
     } catch (err) {
       self.postMessage({ type: 'error', id: msg.id, error: err.message });

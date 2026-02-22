@@ -44,6 +44,9 @@ run_py() {
   "$PYTHON" "$@"
 }
 
+log "Creating NukeDB schema"
+run_py scripts/create_db_schema.py --output data/nuke_routes.db
+
 log "Downloading latest OpenFlights dumps"
 run_py scripts/download_openflights.py --dest data/raw
 
@@ -51,6 +54,15 @@ log "Ingesting OpenFlights data into data/nuke_routes.db"
 run_py scripts/ingest_openflights.py \
   --airports data/raw/airports.dat \
   --routes data/raw/routes.dat \
+  --output data/nuke_routes.db
+
+log "Downloading Shipping Lanes GeoJSON"
+mkdir -p data/raw # Ensure raw data directory exists
+curl -s -o data/raw/Shipping_Lanes_v1.geojson https://raw.githubusercontent.com/newzealandpaul/Shipping-Lanes/main/data/Shipping_Lanes_v1.geojson
+
+log "Ingesting Maritime data into data/nuke_routes.db"
+run_py scripts/ingest_maritime.py \
+  --geojson data/raw/Shipping_Lanes_v1.geojson \
   --output data/nuke_routes.db
 
 log "Exporting airports for static dashboard"

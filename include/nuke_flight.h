@@ -25,7 +25,8 @@ typedef struct { int dummy; } ttak_mem_tree_t;
 
 #define NUKE_MAX_TRANSFERS 5
 #define NUKE_MAX_LEGS (NUKE_MAX_TRANSFERS + 1)
-#define NUKE_MAX_AIRPORTS_IN_PATH (NUKE_MAX_LEGS + 1)
+#define NUKE_MAX_NODES_IN_PATH (NUKE_MAX_LEGS + 1) // Renamed from AIRPORTS_IN_PATH
+#define NUKE_LAYER_MAX_LEN 8 // Maximum length for layer strings ("air", "sea", "land", etc., plus null terminator)
 
 typedef struct nuke_flight_store nuke_flight_store_t;
 
@@ -39,13 +40,14 @@ typedef struct {
 } nuke_search_params_t;
 
 typedef struct {
-    int airport_ids[NUKE_MAX_AIRPORTS_IN_PATH];
-    char airport_codes[NUKE_MAX_AIRPORTS_IN_PATH][4];
-    size_t airport_count;
+    int node_ids[NUKE_MAX_NODES_IN_PATH]; // Renamed from airport_ids
+    char node_codes[NUKE_MAX_NODES_IN_PATH][4]; // Renamed from airport_codes
+    size_t node_count; // Renamed from airport_count
     size_t hops;
     double total_distance_km;
     double great_circle_km;
     double efficiency;
+    char layer[8]; // New: layer of the path (e.g., "air", "sea")
 } nuke_path_result_t;
 
 typedef struct {
@@ -71,13 +73,14 @@ struct nuke_flight_store {
     ttak_mem_tree_t mem_tree;
     bool mem_tree_ready;
 
-    // Airport vertical arrays
-    size_t airport_count;
-    int *airport_ids;
-    double *airport_lat;
-    double *airport_lon;
-    char (*airport_codes)[4];
-    char (*airport_countries)[32];
+    // Node vertical arrays (formerly Airport)
+    size_t node_count; // Renamed
+    int *node_ids; // Renamed
+    double *node_lat; // Renamed
+    double *node_lon; // Renamed
+    char (*node_codes)[4]; // Renamed
+    char (*node_countries)[32]; // Renamed
+    char *node_layers; // New: layer information for each node (e.g., 'air', 'sea')
 
     // Code lookup hash
     uint32_t *code_keys;
@@ -91,6 +94,7 @@ struct nuke_flight_store {
     int *adj_route_ids;
     size_t *adj_dst_indices;
     double *adj_distance;
+    char *adj_route_layers; // New: layer information for each route (e.g., 'air', 'sea')
 
     // Worker pool
     cwist_io_queue *worker_queue;
@@ -119,7 +123,7 @@ int nuke_search_routes(nuke_flight_store_t *store,
                        const nuke_search_params_t *params,
                        nuke_path_buffer_t *buffer);
 
-bool nuke_store_has_airport(const nuke_flight_store_t *store, const char code[4]);
+bool nuke_store_has_node(const nuke_flight_store_t *store, const char code[4]); // Renamed
 
 #ifdef __EMSCRIPTEN__
 int nuke_store_load_from_blob(nuke_flight_store_t *store, const void *blob, size_t size);

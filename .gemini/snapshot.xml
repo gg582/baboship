@@ -1,0 +1,166 @@
+<state_snapshot>
+    <overall_goal>
+        Expand the logistics tracking application to include domestic parcel tracking and sea shipping, using a hybrid WASM/frontend architecture, MapLibre GL JS for mapping, and an updated UI.
+    </overall_goal>
+
+    <active_constraints>
+        <constraint>Implement domestic parcel tracking using the `deliveryapi.co.kr` API, including auto-detection and manual carrier selection.</constraint>
+        <constraint>Integrate MapLibre GL JS for OpenStreetMap-based route visualization.</constraint>
+        <constraint>Add sea shipping tracking using the `Searoute` library's data (GeoJSON shipping lanes).</constraint>
+        <constraint>Ensure all new data is integrated into the WebAssembly module (`nuke_blob.bin`).</constraint>
+        <constraint>Adhere to GitHub Pages 1GB size limit and browser memory limitations by using a hybrid architecture for EGIS data (WASM for indices, frontend for dynamic tile loading).</constraint>
+        <constraint>Implement a new UI design for tabs: smooth rounded corners, monotone styling, with a small accent color in the top-right of the tab button, maintaining integration with the body.</constraint>
+        <constraint>Prefer C-language implementation for logic where possible, especially for core engine functions.</constraint>
+        <constraint>Adhere to `libttak` and `cwist` specifications.</constraint>
+        <constraint>For domestic parcels, compare the shortest road-based distance (via OpenStreetMap) with the actual delivery path to assess delivery reasonableness.</constraint>
+        <constraint>Implement heuristic logic for ambiguous domestic logistics cases using pre-saved major logistics centers or regional central points.</constraint>
+    </active_constraints>
+
+    <key_knowledge>
+        <fact>The project utilizes C for core logistics engine logic, Python for data ingestion, and JavaScript for the frontend.</fact>
+        <fact>The WebAssembly module (`nuke_kernel.wasm`) loads a custom binary blob (`nuke_blob.bin`) for an in-memory graph representation.</fact>
+        <fact>Domestic parcel tracking implements carrier ID auto-detection based on tracking number length, regex patterns, and a Modulus 7 checksum algorithm.</fact>
+        <fact>The `deliveryapi.co.kr` service is selected for domestic parcel tracking due to its free tier, JSON output, and REST API compliance.</fact>
+        <fact>Sea shipping route data is sourced from `Shipping_Lanes_v1.geojson` (derived from the `newzealandpaul/Shipping-Lanes` GitHub repository).</fact>
+        <fact>The `nuke_routes.db` SQLite schema has been unified, replacing the `airports` table with `nodes` (including a `layer` column) and updating the `routes` table (adding `layer` and `path_geojson` columns).</fact>
+        <fact>The binary blob (`nuke_blob.bin`) format has been updated to Version 3 to include node countries, node layers, and route layers.</fact>
+        <fact>The mapping of layer strings to integers ('air': 0, 'sea': 1, 'land': 2) defined in Python scripts must be consistently applied and interpreted in C code.</fact>
+        <fact>The `path_geojson` for routes is stored in `nuke_routes.db` but the full GeoJSON `LineString` geometry is currently *not* loaded into the C-side graph structure; route path visualization in MapLibre will be reconstructed from node coordinates.</fact>
+        <fact>The core C engine (`src/nuke_flight.c`) now processes blob Version 3 and references generic `node_` and `route_` structures rather than `airport_` specific ones.</fact>
+        <fact>The frontend uses MapLibre GL JS for map rendering, replacing the custom canvas-based tile drawing, utilizing `https://tiles.stadiamaps.com/styles/stadium-dark.json` as an example style.</fact>
+        <fact>The `nuke_path_result_t` structure in `include/nuke_flight.h` now includes a `layer` field to identify the layer (e.g., "air", "sea") of the path.</fact>
+        <fact>Major logistics centers and regional points are defined in `docs/app.js` with keywords and coordinates to aid heuristic location matching.</fact>
+    </key_knowledge>
+
+    <artifact_trail>
+        <item file="docs/index.html">Added a new tab for "국내 택배 추적" (Domestic Parcel Tracking), placeholders for MapLibre map containers, and MapLibre GL JS CDN links.</item>
+        <item file="docs/app.css">Modified `.mode-tabs`, `.mode-tab`, and `.mode-tab.active` to implement the new tab UI design (smooth rounded corners, monotone, top-right accent, no gradients).</item>
+        <item file="docs/app.js">
+            Renamed `state.airports` and `state.airportMap` to `state.nodes` and `state.nodeMap`.
+            Added `fetchDomesticTrackingEvents`, `handleDomesticTrackingFetch`, `verifyMod7Js`, and `resolveDomesticCarriers` for domestic tracking functionality.
+            Refactored `setTrackingStatus`, `renderTrackingMetrics`, and `renderTrackingTimeline` to accept an `element` parameter for reusability.
+            Updated international tracking function names (`handleTrackingFetchIntl`, `runTrackingAnalysisIntl`).
+            Initialized MapLibre maps (`mainMapLibre`, `modalMapLibre`) and defined `MapLayerStyle` for nodes, routes, and ORS road routes.
+            Introduced `updateMapNodes`, `updateMapRoutes`, and `updateORSMapRoute` for MapLibre map data updates.
+            Removed old canvas-related map rendering and interaction logic.
+            `fetchNodes` introduced to load node data from WASM.
+            Updated `computeBestDestinationsLocal`, `computeBestDestinationsNative`, `requestBestFrom`, `requestBestTo` to use node data.
+            Updated `searchRoutes` to correctly display node codes and render routes using `updateMapRoutes`.
+            Updated `setInputField` to use MapLibre's `setFeatureState` for highlighting.
+            Removed unused `assetPaths.airportsJson`.
+            Added `ORS_API_KEY` and `ORS_BASE_URL` constants.
+            Added `fetchORSPath` function to retrieve road-based paths from OpenRouteService.
+            Modified `enrichTrackingEvents` to include `lat` and `lon` for events by resolving aliases against `state.nodeMap` and `MAJOR_LOGISTICS_CENTERS`.
+            Modified `handleDomesticTrackingFetch` to call `fetchORSPath`, display the ORS road route on MapLibre, and show the road distance in the UI.
+            Added `MAJOR_LOGISTICS_CENTERS` constant with predefined locations and keywords.
+            Enhanced `normalizeTrackingLocation` to use `MAJOR_LOGISTICS_CENTERS` for heuristic matching.
+        </item>
+        <item file="scripts/ingest_maritime.py">
+            New script created to parse `Shipping_Lanes_v1.geojson` and append sea nodes/routes into `nuke_routes.db`.
+            Modified to correctly handle `MultiLineString` geometries and ensure unique node code generation.
+        </item>
+        <item file="scripts/create_db_schema.py">New script created to define and initialize the unified `nodes` and `routes` table schema in `nuke_routes.db`.</item>
+        <item file="scripts/ingest_openflights.py">
+            Modified to no longer manage schema; its `seed_data` now appends air nodes/routes to the unified `nuke_routes.db`.
+            Modified `load_airports` to deduplicate nodes by `code` before insertion.
+        </item>
+        <item file="generate_all.sh">Modified to first call `scripts/create_db_schema.py`, then `scripts/download_openflights.py`, then `scripts/ingest_openflights.py`, followed by downloading `Shipping_Lanes_v1.geojson` and calling `scripts/ingest_maritime.py`.</item>
+        <item file="include/nuke_flight.h">
+            Updated `nuke_flight_store_t`, `nuke_path_result_t` structs and related definitions (`NUKE_MAX_NODES_IN_PATH`, `nuke_store_has_node`) to use `node_` prefixes and include `node_layers` and `adj_route_layers` fields.
+            Added `layer` field to `nuke_path_result_t`.
+            Added `#define NUKE_LAYER_MAX_LEN 8`.
+        </item>
+        <item file="scripts/export_nuke_blob.py">Modified to pack `node_countries`, `node_layers`, `adj_route_layers` into the binary blob (Version 3).</item>
+        <item file="src/nuke_flight.c">
+            Modified `nuke_store_load_from_blob` to parse the Version 3 blob format, populating the new layer data. All `airport_` references were updated to `node_`. Removed old non-WASM data loading functions and calls.
+            Corrected `->` to `.` for `group` members in non-Emscripten `nuke_search_routes` block.
+            Corrected `store->` to `group->store->` for accessing `nuke_flight_store_t` members in `append_result_locked`.
+            Temporarily disabled native `pthread` worker pool initialization and cleanup.
+        </item>
+        <item file="data/raw/Shipping_Lanes_v1.geojson">Downloaded sea routes data.</item>
+        <item file="wasm/nuke_kernel.c">
+            Renamed `nuke_wasm_get_airports_json` to `nuke_wasm_get_nodes_json` and updated its output to include node layer information.
+            Updated `nuke_wasm_search_routes_json` to use node data and include the path's layer in the JSON output.
+            Updated `nuke_wasm_get_health_json`, `nuke_wasm_get_direct_destinations_json`, and `nuke_wasm_get_best_nodes_json` to use node data and include layer information where appropriate.
+            Updated `wasm_collect_forbidden_countries` to use node data.
+        </item>
+        <item file="docs/best-worker.js">
+            Renamed `airports` to `nodes` throughout the script and updated related data structures and function calls.
+            Modified message handling to pass node data to the worker and cache it.
+        </item>
+        <item file="src/server.c">
+            Updated all `airport_` references to `node_` in various handlers (`health_handler`, `airports_handler`/`nodes_handler`, `routes_handler`, `direct_handler`, `best_handler`).
+            Renamed `lookup_airport_index` to `lookup_node_index`.
+            Modified `logistics_best_node_t` struct to use `anchor_node` and include `layer`.
+            Added layer information to JSON outputs for nodes and paths.
+            Updated `main` function to use `nodes_handler`.
+        </item>
+        <item file="wasm/logistics_engine.c">
+            Renamed `lookup_airport_coords` to `lookup_node_coords`.
+            Updated all `airport_` references to `node_` within `lookup_node_coords` and calls to it.
+            Implemented `copy_upper` function.
+        </item>
+        <item file="Makefile">
+            Modified to only build WASM components.
+            Removed native application build rules and dependencies on missing `cwist` library.
+            Added `db-setup` phony target to run `bash generate_all.sh`.
+            Made `docs/airports.json` and `docs/wasm/nuke_blob.bin` depend on `db-setup`.
+        </item>
+    </artifact_trail>
+
+    <file_system_state>
+        <CWD>/home/yjlee/baboship</CWD>
+        <MODIFIED>docs/index.html</MODIFIED>
+        <MODIFIED>docs/app.css</MODIFIED>
+        <MODIFIED>docs/app.js</MODIFIED>
+        <CREATED>scripts/ingest_maritime.py</CREATED>
+        <CREATED>scripts/create_db_schema.py</CREATED>
+        <MODIFIED>scripts/ingest_openflights.py</MODIFIED>
+        <MODIFIED>generate_all.sh</MODIFIED>
+        <MODIFIED>include/nuke_flight.h</MODIFIED>
+        <MODIFIED>scripts/export_nuke_blob.py</MODIFIED>
+        <MODIFIED>src/nuke_flight.c</MODIFIED>
+        <DOWNLOADED>data/raw/Shipping_Lanes_v1.geojson (437KB)</DOWNLOADED>
+        <MODIFIED>wasm/nuke_kernel.c</MODIFIED>
+        <MODIFIED>docs/best-worker.js</MODIFIED>
+        <MODIFIED>src/server.c</MODIFIED>
+        <MODIFIED>wasm/logistics_engine.c</MODIFIED>
+        <MODIFIED>Makefile</MODIFIED>
+    </file_system_state>
+
+    <recent_actions>
+        <action>Completed frontend integration for domestic parcel tracking, including UI and API calls.</action>
+        <action>Completed UI redesign for tabs in `app.css`.</action>
+        <action>Integrated sea shipping data acquisition and processing pipeline, including new Python scripts, database schema updates, and modifications to the binary blob export and C parsing logic.</action>
+        <action>Completed MapLibre GL JS integration in `docs/app.js`, replacing canvas drawing and adapting to the new node-based data structure.</action>
+        <action>Completed WASM module updates in `wasm/nuke_kernel.c` and `include/nuke_flight.h` to expose node and path layer information, and updated function names/parameters to use 'node' instead of 'airport'.</action>
+        <action>Completed Web Worker updates in `docs/best-worker.js` to use node data structures and adapt to the new WASM interfaces.</action>
+        <action>Integrated OpenRouteService API in `docs/app.js` to fetch and display road-based shortest paths for domestic tracking events.</action>
+        <action>Implemented heuristic logic for ambiguous domestic logistics cases using `MAJOR_LOGISTICS_CENTERS` in `docs/app.js`.</action>
+        <action>Fixed C compilation errors by correcting `nuke_worker_group_t` member access and defining `NUKE_LAYER_MAX_LEN`.</action>
+        <action>Updated `src/server.c` to use `node_` naming convention and include layer information in JSON outputs.</action>
+        <action>Updated `wasm/logistics_engine.c` to use `node_` naming convention and implemented the `copy_upper` function.</action>
+        <action>Modified `Makefile` to only build WASM components and to correctly trigger database setup before generating blob files.</action>
+        <action>Fixed Python `ingest_openflights.py` to deduplicate nodes by code to prevent `UNIQUE constraint failed` errors.</action>
+        <action>Fixed Python `ingest_maritime.py` to correctly parse `MultiLineString` geometries from GeoJSON.</action>
+    </recent_actions>
+
+    <task_state>
+        <step status="DONE">Implement domestic parcel tracking (frontend UI, API integration).</step>
+        <step status="DONE">Redesign tab UI.</step>
+        <step status="DONE">Integrate sea shipping data acquisition and C/WASM logic.</step>
+        <step status="DONE">Integrate MapLibre GL JS into `docs/app.js` and replace canvas drawing.</step>
+            <sub_step status="DONE">Updated `docs/index.html` with MapLibre CDN and `div` containers.</sub_step>
+            <sub_step status="DONE">Initializing MapLibre maps and removing old canvas variables/functions.</sub_step>
+            <sub_step status="DONE">Refactor `airport` -> `node` references in `computeBestDestinationsLocal`, `computeBestDestinationsNative`, `searchRoutes`, `requestBestFrom`, `requestBestTo` functions.</sub_step>
+            <sub_step status="DONE">Replace `drawAllScenes()` with calls to `updateMapRoutes()` for MapLibre maps.</sub_step>
+            <sub_step status="DONE">Ensure `state.kernel.getNodes` correctly populates `state.nodes` and `state.nodeMap`, and `updateMapNodes` is called.</sub_step>
+            <sub_step status="DONE">Fully implement `updateMapRoutes` to correctly visualize calculated paths as GeoJSON LineStrings on the MapLibre maps.</sub_step>
+            <sub_step status="DONE">Implement MapLibre `map.on('click', ...)` event listener for node selection on the map.</sub_step>
+            <sub_step status="DONE">Remove unused `assetPaths.airportsJson` and related fallback logic in `fetchNodes` if no longer needed.</sub_step>
+        <step status="DONE">Implement `nuke_wasm_get_nodes_json` function in `wasm/nuke_kernel.c` to expose node data (id, code, lat, lon, country, layer) as a JSON string from the C store.</step>
+        <step status="DONE">Verify `nuke_wasm_search_routes_json` compatibility with updated node/route structures and ensure it provides layer information in the JSON output if needed by frontend visualization.</step>
+        <step status="DONE">Implement comparison of road-based shortest path with actual delivery path for domestic parcels using OSM data.</step>
+        <step status="DONE">Implement heuristic logic for ambiguous domestic logistics cases using pre-saved major logistics centers or regional central points.</step>
+    </task_state>
+</state_snapshot>

@@ -146,7 +146,14 @@ static edi_state_t g_state;
 static char g_result_buffer[RESULT_BUFFER_SIZE];
 
 static inline size_t min_size(size_t a, size_t b) { return a < b ? a : b; }
-static size_t copy_upper(const char *src, size_t len, char *dst, size_t cap);
+static size_t copy_upper(const char *src, size_t len, char *dst, size_t cap) {
+    size_t actual = min_size(len, cap - 1);
+    for (size_t i = 0; i < actual; ++i) {
+        dst[i] = (char)toupper((unsigned char)src[i]);
+    }
+    dst[actual] = '\0';
+    return actual;
+}
 
 extern const nuke_flight_store_t* nuke_wasm_get_store(void);
 #ifndef __EMSCRIPTEN__
@@ -161,10 +168,10 @@ static const nuke_flight_store_t* logistics_get_store(void) {
 #endif
 }
 
-static bool lookup_airport_coords(const char *code, route_node_t *out) {
+static bool lookup_node_coords(const char *code, route_node_t *out) { // Renamed from lookup_airport_coords
     if (!code || !out) return false;
     const nuke_flight_store_t *store = logistics_get_store();
-    if (!store || !store->airport_codes || store->airport_count == 0) return false;
+    if (!store || !store->node_codes || store->node_count == 0) return false; // Renamed airport_codes to node_codes, airport_count to node_count
 
     char target[4] = {0};
     size_t written = 0;
@@ -173,14 +180,14 @@ static bool lookup_airport_coords(const char *code, route_node_t *out) {
     }
     if (written != 3) return false;
 
-    for (size_t i = 0; i < store->airport_count; ++i) {
-        const char *candidate = store->airport_codes[i];
+    for (size_t i = 0; i < store->node_count; ++i) { // Renamed airport_count to node_count
+        const char *candidate = store->node_codes[i]; // Renamed airport_codes to node_codes
         if (!candidate || candidate[0] == '\0') continue;
         if (strncasecmp(target, candidate, 3) == 0) {
             memcpy(out->iata, candidate, 3);
             out->iata[3] = '\0';
-            out->lat = (float)store->airport_lat[i];
-            out->lon = (float)store->airport_lon[i];
+            out->lat = (float)store->node_lat[i]; // Renamed airport_lat to node_lat
+            out->lon = (float)store->node_lon[i]; // Renamed airport_lon to node_lon
             return true;
         }
     }
@@ -227,7 +234,7 @@ static bool resolve_country_code_token(const char upper[3], route_node_t *out) {
     char iso[3] = {upper[0], upper[1], '\0'};
     const tracking_country_hub_t *hub = lookup_country_hub(iso);
     if (!hub) return false;
-    return lookup_airport_coords(hub->iata, out);
+    return lookup_node_coords(hub->iata, out); // Renamed lookup_airport_coords to lookup_node_coords
 }
 
 #if HAS_IMPC_DATA
@@ -285,13 +292,13 @@ static bool resolve_impc_token(const char *upper, size_t len, route_node_t *out)
     if (lookup_impc_table(upper, out)) return true;
 #endif
 
-    if (lookup_airport_coords(city, out)) return true;
+    if (lookup_node_coords(city, out)) return true; // Renamed lookup_airport_coords to lookup_node_coords
 
     const char *city_hint = lookup_impc_city_hint(city);
-    if (city_hint && lookup_airport_coords(city_hint, out)) return true;
+    if (city_hint && lookup_node_coords(city_hint, out)) return true; // Renamed lookup_airport_coords to lookup_node_coords
 
     const char *country_hint = lookup_impc_country_hint(iso);
-    if (country_hint && lookup_airport_coords(country_hint, out)) return true;
+    if (country_hint && lookup_node_coords(country_hint, out)) return true; // Renamed lookup_airport_coords to lookup_node_coords
 
     return false;
 }
@@ -371,15 +378,6 @@ static void log_normalize(const char *raw, log_parse_result_t *out) {
     }
 }
 
-static size_t copy_upper(const char *src, size_t len, char *dst, size_t cap) {
-    size_t actual = min_size(len, cap - 1);
-    for (size_t i = 0; i < actual; ++i) {
-        dst[i] = (char)toupper((unsigned char)src[i]);
-    }
-    dst[actual] = '\0';
-    return actual;
-}
-
 static bool resolve_token_to_node(strview_t token, route_node_t *out) {
     if (!out) return false;
     char buffer[16];
@@ -390,14 +388,14 @@ static bool resolve_token_to_node(strview_t token, route_node_t *out) {
 
     if (len == 2 && resolve_country_code_token(buffer, out)) return true;
 
-    if (len == 3 && lookup_airport_coords(buffer, out)) return true;
+    if (len == 3 && lookup_node_coords(buffer, out)) return true; // Renamed lookup_airport_coords to lookup_node_coords
 
     const char *alias_code = lookup_alias_code((strview_t){buffer, len});
-    if (alias_code && lookup_airport_coords(alias_code, out)) return true;
+    if (alias_code && lookup_node_coords(alias_code, out)) return true; // Renamed lookup_airport_coords to lookup_node_coords
 
     const char *dash = strchr(buffer, '-');
     if (dash && strlen(dash + 1) == 3) {
-        if (lookup_airport_coords(dash + 1, out)) return true;
+        if (lookup_node_coords(dash + 1, out)) return true; // Renamed lookup_airport_coords to lookup_node_coords
     }
 
     if (len > 3) {
@@ -413,7 +411,7 @@ static bool resolve_token_to_node(strview_t token, route_node_t *out) {
                 buffer[i + 2],
                 '\0'
             };
-            if (lookup_airport_coords(window, out)) return true;
+            if (lookup_node_coords(window, out)) return true; // Renamed lookup_airport_coords to lookup_node_coords
         }
     }
 
