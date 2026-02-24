@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>바보쉽 국내 물류 콘솔</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="app.css">
+    <script>
+        window.__baboship_config = window.__baboship_config || {};
+        window.__baboship_config.trackerApiBase = 'https://apis.tracker.delivery';
+        window.__baboship_config.trackerApiKey = '';
+    </script>
+</head>
+<body class="app-shell">
+    <div class="app-container">
+        <header class="app-header">
+            <div class="brand">
+                <strong>바보쉽 국내 물류 콘솔</strong>
+                <p>국내 택배사 송장 추적과 도로 경로 분석을 수행합니다.</p>
+            </div>
+            <div class="mode-tabs" role="tablist" aria-label="화물 분석 모드">
+                <button type="button" class="mode-tab active" data-mode-tab="domestic-tracking" role="tab" aria-controls="domestic-tracking-panel" aria-selected="true">국내 택배 추적</button>
+                <button type="button" class="mode-tab" data-mode-tab="manual" role="tab" aria-controls="manual-panel" aria-selected="false">수동 도로 경로</button>
+            </div>
+        </header>
+
+        <section class="panel domestic-tracking-panel" id="domestic-tracking-panel" data-panel="domestic-tracking">
+            <div class="card tracking-card">
+                <div class="tracking-header">
+                    <div>
+                        <div class="pill soft">국내 택배 분석</div>
+                        <h2>송장번호로 국내 물류 추적</h2>
+                        <p>송장 번호를 입력하면 국내 주요 택배사 이벤트를 불러와 도로 경로 효율을 계산합니다.</p>
+                    </div>
+                    <div class="tracking-actions">
+                        <label>
+                            <span>택배사</span>
+                            <select id="carrier-select-domestic">
+                                <option value="">택배사 자동 감지</option>
+                                <option value="kr.cjlogistics">CJ대한통운</option>
+                                <option value="kr.hanjin">한진택배</option>
+                                <option value="kr.lotte">롯데택배</option>
+                                <option value="kr.logen">로젠택배</option>
+                                <option value="kr.epost">우체국택배</option>
+                            </select>
+                        </label>
+                        <label>
+                            <span>송장번호</span>
+                            <input type="text" id="tracking-number-domestic" placeholder="숫자만 입력" autocomplete="off">
+                        </label>
+                        <button type="button" id="tracking-fetch-btn-domestic">조회하기</button>
+                    </div>
+                </div>
+                <div class="tracking-body">
+                    <label class="log-input">
+                        <span>이벤트 원문 (JSON)</span>
+                        <textarea id="tracking-log-input-domestic" rows="5" placeholder="조회 시 자동으로 채워집니다."></textarea>
+                    </label>
+                    <div class="tracking-body-actions">
+                        <div class="tracking-status" id="tracking-status-domestic">송장번호를 입력하세요.</div>
+                    </div>
+                </div>
+                <div class="tracking-metrics" id="tracking-metrics-domestic">
+                    <div class="empty-state">분석 결과가 여기에 표시됩니다.</div>
+                </div>
+                <div class="tracking-timeline" id="tracking-timeline-domestic">
+                    <div class="empty-state">이벤트를 불러오면 경로가 시간순으로 나타납니다.</div>
+                </div>
+            </div>
+        </section>
+
+        <main class="layout panel hidden manual-panel" id="manual-panel" data-panel="manual">
+            <section class="card hero-card">
+                <div class="pill">Domestic Road Analytics</div>
+                <h1>국내 도로 경로 설계</h1>
+                <p>주요 허브 간의 도로 주행 거리와 시간을 계산합니다.</p>
+            </section>
+
+            <div class="grid">
+                <section class="card controls-card">
+                    <h2>도로 경로 탐색</h2>
+                    <p>지도에서 허브를 선택하거나 좌표를 지정하여 최적 주행 경로를 탐색합니다.</p>
+                    <div class="form-grid">
+                         <!-- Simplified for domestic -->
+                         <div class="empty-state">국내 도로 경로 탐색 기능 준비 중...</div>
+                    </div>
+                </section>
+
+                <section class="card map-card">
+                    <h2>국내 물류망 지도</h2>
+                    <div id="map-container" class="map-container">
+                        <div id="map-loader">데이터를 불러오는 중...</div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+    <script src="domestic.js" type="module" defer></script>
+</body>
+</html>

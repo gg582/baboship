@@ -437,13 +437,14 @@ button.ghost:hover {
     font-weight: 600;
 }
 
-#map-wrapper {
+.map-container {
     position: relative;
     border-radius: 0;
     overflow: hidden;
     border: 1px solid var(--card-border);
     min-height: 360px;
     background: #eef1f7;
+    width: 100%;
 }
 
 .map-canvas {
@@ -457,10 +458,6 @@ button.ghost:hover {
     user-select: none;
 }
 
-.map-canvas.dragging {
-    cursor: grabbing;
-}
-
 #map-loader {
     position: absolute;
     inset: 0;
@@ -470,6 +467,7 @@ button.ghost:hover {
     font-weight: 600;
     color: var(--accent);
     background: rgba(245, 246, 248, 0.92);
+    z-index: 10;
 }
 
 #map-loader.error {

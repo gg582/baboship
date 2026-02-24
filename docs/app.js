@@ -11,7 +11,6 @@ const state = {
   isMobile: false,
   uiMode: 'manual',
   trackingEventsIntl: [],
-  domesticTrackingEvents: [],
   wasmUnavailableReason: '',
   nativeMode: false,
   nativeHealth: null,
@@ -397,7 +396,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const modeTabs = document.querySelectorAll('[data-mode-tab]');
   const manualPanel = document.querySelector('[data-panel="manual"]');
   const trackingPanel = document.querySelector('[data-panel="tracking"]');
-  const domesticTrackingPanel = document.querySelector('[data-panel="domestic-tracking"]');
   const mapModeButtons = document.querySelectorAll('.map-mode button');
   const bestFromTitle = document.getElementById('best-from-title');
   const bestToTitle = document.getElementById('best-to-title');
@@ -416,14 +414,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const trackingStatusIntl = document.getElementById('tracking-status-intl');
   const trackingMetricsIntl = document.getElementById('tracking-metrics-intl');
   const trackingTimelineIntl = document.getElementById('tracking-timeline-intl');
-
-  const trackingNumberInputDomestic = document.getElementById('tracking-number-domestic');
-  const carrierSelectDomestic = document.getElementById('carrier-select-domestic');
-  const trackingFetchBtnDomestic = document.getElementById('tracking-fetch-btn-domestic');
-  const trackingLogInputDomestic = document.getElementById('tracking-log-input-domestic');
-  const trackingStatusDomestic = document.getElementById('tracking-status-domestic');
-  const trackingMetricsDomestic = document.getElementById('tracking-metrics-domestic');
-  const trackingTimelineDomestic = document.getElementById('tracking-timeline-domestic');
 
   // --- MapLibre GL JS Integration ---
   function initMap(containerId, isModal = false) {
@@ -609,7 +599,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     if (manualPanel) manualPanel.classList.toggle('hidden', mode !== 'manual');
     if (trackingPanel) trackingPanel.classList.toggle('hidden', mode !== 'tracking');
-    if (domesticTrackingPanel) domesticTrackingPanel.classList.toggle('hidden', mode !== 'domestic-tracking');
     
     // Trigger map resize when panel becomes visible
     if (mainMapLibre) mainMapLibre.resize();
@@ -766,77 +755,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     return carriers;
   }
-
-  // --- Domestic Tracking Functions ---
-
-  // Modulus 7 implementation for domestic tracking numbers
-  function verifyMod7Js(trackNo) {
-      const len = trackNo.length;
-      if (len < 10) return false;
-
-      let mainPart = 0;
-      const checkDigit = parseInt(trackNo[len - 1], 10);
-
-      for (let i = 0; i < len - 1; i++) {
-          mainPart = (mainPart * 10) + parseInt(trackNo[i], 10);
-      }
-
-      return (mainPart % 7) === checkDigit;
-  }
-
-  // Auto-detect domestic carriers based on tracking number patterns
-  function resolveDomesticCarriers(trackNo) {
-      const normalized = (trackNo || '').trim().replace(/[^0-9]/g, ''); // Remove non-digits
-      const carriers = [];
-      const pushUnique = (id, label) => {
-          if (!carriers.some(entry => entry.id === id)) {
-              carriers.push({ id, label });
-          }
-      };
-
-      // Specific rules
-      // 우체국택배 (13자리, 1,2,5,6으로 시작)
-      if (normalized.length === 13 && (/^1\d{12}$/.test(normalized) || /^2\d{12}$/.test(normalized) || /^5\d{12}$/.test(normalized) || /^6\d{12}$/.test(normalized))) {
-          pushUnique('kr.epost', '우체국택배');
-          return carriers; // If matched, it's highly likely Epost, so return directly
-      }
-      // 로젠택배 (11자리, Mod 7)
-      if (normalized.length === 11 && verifyMod7Js(normalized)) {
-          pushUnique('kr.logen', '로젠택배');
-          return carriers;
-      }
-
-      // Overlapping rules (Mod 7, 10 or 12 digits) - these will be candidates
-      if ((normalized.length === 10 || normalized.length === 12) && verifyMod7Js(normalized)) {
-          pushUnique('kr.cjlogistics', 'CJ대한통운');
-          pushUnique('kr.hanjin', '한진택배');
-      }
-      
-      // CU/GS25 (10 digits) - often uses CJ Logistics backend
-      if (normalized.length === 10) {
-          pushUnique('kr.cupost', 'CU 편의점택배');
-          pushUnique('kr.cvsnet', 'GS25 편의점택배');
-          pushUnique('kr.cjlogistics', 'CJ대한통운'); // Sometimes uses CJ backend
-      }
-      
-      // Fallback for Mod 7 (if not caught by specific length rules and no other carriers added)
-      if (verifyMod7Js(normalized) && carriers.length === 0) {
-           pushUnique('kr.cjlogistics', 'CJ대한통운');
-           pushUnique('kr.hanjin', '한진택배');
-           pushUnique('kr.logen', '로젠택배');
-      }
-
-      // General 10-12 digit fallbacks if nothing specific found and no carriers yet
-      if (carriers.length === 0) {
-          if (normalized.length === 10 || normalized.length === 12) {
-              pushUnique('kr.cjlogistics', 'CJ대한통운');
-              pushUnique('kr.hanjin', '한진택배');
-          }
-      }
-
-      return carriers;
-  }
-
 
   function getEventDate(progress) {
     const candidates = [
@@ -1077,172 +995,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // --- Domestic Tracking Fetch and Display ---
-
-  async function fetchDomesticTrackingEvents(invoice, carrierId) {
-      if (!carrierId) throw new Error('택배사 ID를 선택하거나 자동 감지해 주세요.');
-      const endpoint = `${TRACKER_DELIVERY_API}/carriers/${carrierId}/tracks/${encodeURIComponent(invoice)}`;
-      try {
-          const headers = { 'Accept': 'application/json' };
-          if (TRACKER_API_KEY) {
-              headers['X-Tracker-API-Key'] = TRACKER_API_KEY;
-          }
-          const response = await fetch(endpoint, {
-              headers,
-              mode: 'cors'
-          });
-          const rawBody = await response.text();
-          if (!response.ok) {
-              let detail = '';
-              try {
-                  const parsed = rawBody ? JSON.parse(rawBody) : null;
-                  detail = parsed?.message || '';
-              } catch (_) {
-                  detail = rawBody?.trim();
-              }
-              throw new Error(detail ? `HTTP ${response.status} ${detail}` : `HTTP ${response.status}`);
-          }
-          let data = {};
-          try {
-              data = rawBody ? JSON.parse(rawBody) : {};
-          } catch (err) {
-              throw new Error('JSON 파싱 실패');
-          }
-
-          const progresses = Array.isArray(data?.progresses) ? data.progresses : [];
-          if (!progresses.length && !data.state) {
-              throw new Error('진행 이벤트 또는 상태 정보가 비어 있습니다.');
-          }
-          return data;
-      } catch (err) {
-          throw new Error(`배송조회 API에 연결하지 못했습니다. ${err.message}`);
-      }
-  }
-
-  async function handleDomesticTrackingFetch() {
-      if (!trackingNumberInputDomestic) return;
-      const invoice = trackingNumberInputDomestic.value.trim();
-      if (!invoice) {
-          setTrackingStatus(trackingStatusDomestic, '송장번호를 입력하세요.', 'error');
-          trackingNumberInputDomestic.focus();
-          return;
-      }
-
-      let selectedCarrierId = carrierSelectDomestic.value;
-
-      if (!selectedCarrierId) {
-          const detectedCarriers = resolveDomesticCarriers(invoice);
-          if (detectedCarriers.length === 1) {
-              selectedCarrierId = detectedCarriers[0].id;
-              carrierSelectDomestic.value = selectedCarriers[0].id;
-              setTrackingStatus(trackingStatusDomestic, `택배사 자동 감지: ${detectedCarriers[0].label}`, 'info');
-          } else if (detectedCarriers.length > 1) {
-              const carrierLabels = detectedCarriers.map(c => c.label).join(', ');
-              setTrackingStatus(trackingStatusDomestic, `여러 택배사가 감지되었습니다 (${carrierLabels}). 직접 선택해 주세요.`, 'info');
-              carrierSelectDomestic.value = '';
-              return;
-          } else {
-              setTrackingStatus(trackingStatusDomestic, '택배사를 자동 감지할 수 없습니다. 직접 선택해 주세요.', 'error');
-              return;
-          }
-      }
-
-      setTrackingStatus(trackingStatusDomestic, `"${selectedCarrierId}"에서 조회 중...`);
-      try {
-          const data = await fetchDomesticTrackingEvents(invoice, selectedCarrierId);
-          if (trackingLogInputDomestic) trackingLogInputDomestic.value = JSON.stringify(data, null, 2);
-
-          const progresses = Array.isArray(data?.progresses) ? data.progresses : [];
-          const enrichedEvents = enrichTrackingEvents(progresses);
-          state.domesticTrackingEvents = enrichedEvents;
-
-          if (!enrichedEvents.length) {
-              if (data.state?.text) {
-                  setTrackingStatus(trackingStatusDomestic, `조회 완료: ${data.state.text}`, 'success');
-              } else {
-                  setTrackingStatus(trackingStatusDomestic, '진행 이벤트를 찾지 못했습니다.', 'error');
-              }
-              renderTrackingTimeline(trackingTimelineDomestic, []);
-              if (trackingMetricsDomestic) trackingMetricsDomestic.innerHTML = '<div class="empty-state">분석 결과가 없습니다.</div>';
-              return;
-          }
-
-          renderTrackingTimeline(trackingTimelineDomestic, enrichedEvents);
-
-          const fromName = data.from?.name || '알 수 없음';
-          const toName = data.to?.name || '알 수 없음';
-          const currentState = data.state?.text || '정보 없음';
-
-          let orsDistanceHtml = '';
-          const startEvent = enrichedEvents.find(e => e.lat != null && e.lon != null);
-          const endEvent = enrichedEvents.reverse().find(e => e.lat != null && e.lon != null); // Find last valid event
-
-          if (startEvent && endEvent && startEvent !== endEvent) {
-            try {
-                const orsRoute = await fetchORSPath(
-                    { lat: startEvent.lat, lon: startEvent.lon },
-                    { lat: endEvent.lat, lon: endEvent.lon }
-                );
-                if (orsRoute) {
-                    updateORSMapRoute(mainMapLibre, orsRoute.geojson);
-                    if (modalMapLibre) {
-                        updateORSMapRoute(modalMapLibre, orsRoute.geojson);
-                    }
-                    orsDistanceHtml = `
-                        <div class="metric">
-                            <span>도로 최단거리</span>
-                            <strong>${(orsRoute.distance / 1000).toFixed(1)} km</strong>
-                        </div>
-                    `;
-                } else {
-                    updateORSMapRoute(mainMapLibre, null); // Clear previous route
-                    if (modalMapLibre) {
-                        updateORSMapRoute(modalMapLibre, null);
-                    }
-                }
-            } catch (orsErr) {
-                console.warn('Failed to fetch ORS path for domestic tracking:', orsErr);
-                orsDistanceHtml = `
-                    <div class="metric">
-                        <span>도로 최단거리</span>
-                        <strong>조회 불가</strong>
-                    </div>
-                `;
-            }
-          } else {
-            updateORSMapRoute(mainMapLibre, null); // Clear previous route
-            if (modalMapLibre) {
-                updateORSMapRoute(modalMapLibre, null);
-            }
-          }
-
-          const metricsHtml = `
-              <div class="metric">
-                  <span>보내는 분</span>
-                  <strong>${fromName}</strong>
-              </div>
-              <div class="metric">
-                  <span>받는 분</span>
-                  <strong>${toName}</strong>
-              </div>
-              <div class="metric">
-                  <span>현재 상태</span>
-                  <strong>${currentState}</strong>
-              </div>
-              ${orsDistanceHtml}
-          `;
-          if (trackingMetricsDomestic) trackingMetricsDomestic.innerHTML = metricsHtml;
-
-          setTrackingStatus(trackingStatusDomestic, `조회 완료: ${currentState}`, 'success');
-
-      } catch (err) {
-          setTrackingStatus(trackingStatusDomestic, err.message || '조회 실패', 'error');
-          renderTrackingTimeline(trackingTimelineDomestic, []);
-          if (trackingMetricsDomestic) trackingMetricsDomestic.innerHTML = '<div class="empty-state">분석 결과가 없습니다.</div>';
-      }
-  }
-
   async function runRouteSearch(from, to, maxTransfers, maxResults) {
+    if (state.kernel) {
+      const data = JSON.parse(state.kernel.searchRoutes(from, to, maxTransfers));
+      if (Array.isArray(data.paths) && maxResults) {
+        data.paths = data.paths.slice(0, maxResults);
+      }
+      return data;
+    }
+    if (state.nativeMode) {
+      return fetchNativeRoutes(from, to, maxTransfers, maxResults || 16);
+    }
+    throw new Error(getWasmUnavailableMessage());
+  }
     if (state.kernel) {
       const data = JSON.parse(state.kernel.searchRoutes(from, to, maxTransfers));
       if (Array.isArray(data.paths) && maxResults) {
@@ -1342,35 +1107,6 @@ document.addEventListener('DOMContentLoaded', () => {
         handleTrackingFetchIntl();
       }
     });
-  }
-
-  if (trackingFetchBtnDomestic) trackingFetchBtnDomestic.addEventListener('click', () => { handleDomesticTrackingFetch().catch(err => console.error(err)); });
-  if (trackingNumberInputDomestic) {
-      trackingNumberInputDomestic.addEventListener('input', () => {
-          setTrackingStatus(trackingStatusDomestic, '송장번호를 입력하세요.');
-          const invoice = trackingNumberInputDomestic.value.trim();
-          if (invoice.length >= 10) {
-              const detected = resolveDomesticCarriers(invoice);
-              if (detected.length === 1) {
-                  carrierSelectDomestic.value = detected[0].id;
-                  setTrackingStatus(trackingStatusDomestic, `택배사 자동 감지: ${detected[0].label}`, 'info');
-              } else if (detected.length > 1) {
-                  setTrackingStatus(trackingStatusDomestic, `여러 택배사가 감지되었습니다. 선택하거나 자동 감지를 기다리세요.`, 'info');
-                  carrierSelectDomestic.value = '';
-              } else {
-                  carrierSelectDomestic.value = '';
-                  setTrackingStatus(trackingStatusDomestic, '택배사를 자동 감지할 수 없습니다. 직접 선택해 주세요.', 'info');
-              }
-          } else {
-              carrierSelectDomestic.value = '';
-          }
-      });
-      trackingNumberInputDomestic.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') {
-              e.preventDefault();
-              handleDomesticTrackingFetch();
-          }
-      });
   }
 
   bestFromRefreshBtn.addEventListener('click', () => { requestBestFrom().catch(err => console.error(err)); });
