@@ -297,9 +297,6 @@ const char* nuke_wasm_get_direct_destinations_json(const char *code) {
     size_t cnt = g_store.route_counts[src_idx];
     size_t off = g_store.route_offsets[src_idx];
 
-    const char *forbidden_countries[16];
-    size_t forbidden_count = wasm_collect_forbidden_countries(norm, forbidden_countries, 16);
-
     static char *buffer = NULL;
     static size_t buffer_size = 0;
     size_t needed = 128 + cnt * 128;
@@ -316,23 +313,14 @@ const char* nuke_wasm_get_direct_destinations_json(const char *code) {
     size_t emitted = 0;
     for (size_t i = 0; i < cnt; ++i) {
         size_t dst_idx = g_store.adj_dst_indices[off + i];
-        if (dst_idx >= g_store.node_count) continue; // Renamed from airport_count
+        if (dst_idx >= g_store.node_count) continue;
 
-        // Skip destinations in forbidden countries
-        if (forbidden_count > 0 && g_store.node_countries) { // Renamed from airport_countries
-            const char *dst_country = g_store.node_countries[dst_idx]; // Renamed from airport_countries
-            bool skip = false;
-            if (dst_country && dst_country[0] != '\0') {
-                for (size_t k = 0; k < forbidden_count; ++k) {
-                    if (strcasecmp(dst_country, forbidden_countries[k]) == 0) {
-                        skip = true;
-                        break;
-                    }
-                }
-            }
-            if (skip) continue;
-        }
-
+        // Skip destinations only if they are for transit. 
+        // For direct destinations, we allow them even if their country is "forbidden" 
+        // as long as the direct route itself isn't restricted.
+        // In this function, we're just listing neighbors.
+        // To be consistent with nuke_search_routes, we don't filter them out here.
+        
         double dist = g_store.adj_distance[off + i];
         const char *country = g_store.node_countries ? g_store.node_countries[dst_idx] : ""; // Renamed from airport_countries
         const char *layer = g_store.node_layers ? g_store.node_layers + (dst_idx * NUKE_LAYER_MAX_LEN) : ""; // Added layer

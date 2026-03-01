@@ -518,13 +518,9 @@ static void worker_execute(void *arg) {
         nuke_route_frame_t frame = stack[--top];
 
         if (frame.node_idx == group->dst_idx) {
-#ifndef __EMSCRIPTEN__
             pthread_mutex_lock(&group->buffer_lock);
-#endif
             append_result_locked(group, &frame, frame.total_distance);
-#ifndef __EMSCRIPTEN__
             pthread_mutex_unlock(&group->buffer_lock);
-#endif
             continue;
         }
 
@@ -537,8 +533,8 @@ static void worker_execute(void *arg) {
             size_t next_node = store->adj_dst_indices[idx];
             if (next_node >= store->node_count) continue;
 
-            // Check if this node's country is forbidden
-            if (is_country_forbidden(store, next_node, group->forbidden_countries, group->forbidden_count)) {
+            // Check if this node's country is forbidden, but allow if it's the destination
+            if (next_node != group->dst_idx && is_country_forbidden(store, next_node, group->forbidden_countries, group->forbidden_count)) {
                 continue;
             }
 
@@ -669,6 +665,7 @@ int nuke_search_routes(nuke_flight_store_t *store,
             .forbidden_countries = params->forbidden_countries,
             .forbidden_count = params->forbidden_count
         };
+        pthread_mutex_init(&group.buffer_lock, NULL);
         atomic_store(&group.pending_jobs, 0);
         atomic_store(&group.stop, false);
 
@@ -680,6 +677,7 @@ int nuke_search_routes(nuke_flight_store_t *store,
             pjob->adj_index = start + i;
             worker_execute(pjob);
         }
+        pthread_mutex_destroy(&group.buffer_lock);
 #else
         nuke_worker_group_t group = {
             .store = store,

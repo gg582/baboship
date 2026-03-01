@@ -25,8 +25,8 @@ WASM_TARGET := $(WASM_DIST_DIR)/$(WASM_MODULE).js
 WASM_SRC := wasm/$(WASM_MODULE).c wasm/logistics_engine.c src/nuke_flight.c
 WASM_EXPORTS := '["_nuke_wasm_init","_nuke_wasm_load_data","_nuke_wasm_gc_distance","_nuke_wasm_route_distance","_nuke_wasm_efficiency","_nuke_wasm_is_valid_iata","_nuke_wasm_get_best_nodes_json","_nuke_wasm_get_nodes_json","_nuke_wasm_get_health_json","_nuke_wasm_search_routes_json","_nuke_wasm_calc_score","_nuke_wasm_get_direct_destinations_json","_analyze_tracking","_get_idiot_score","_malloc","_free"]'
 WASM_RUNTIME_METHODS := '["cwrap","ccall","UTF8ToString","stringToUTF8","lengthBytesUTF8","getValue","setValue","HEAPU8","HEAPF64","allocate","intArrayFromString","ALLOC_NORMAL"]'
-WASM_FLAGS := -std=c17 -Wall -Wextra -Wpedantic -O3 -Iinclude -D__EMSCRIPTEN__
-WASM_EMFLAGS := -s MODULARIZE=1 -s EXPORT_ES6=1 -s EXPORT_NAME=\"createNukeKernel\" -s ENVIRONMENT=web,worker -s ALLOW_MEMORY_GROWTH=1 -s NO_EXIT_RUNTIME=1 -s TOTAL_MEMORY=33554432 -s ERROR_ON_UNDEFINED_SYMBOLS=1
+WASM_FLAGS := -pthread -std=c17 -Wall -Wextra -Wpedantic -O3 -Iinclude -D__EMSCRIPTEN__
+WASM_EMFLAGS := -pthread -s MODULARIZE=1 -s EXPORT_ES6=1 -s EXPORT_NAME=\"createNukeKernel\" -s ENVIRONMENT=web,worker -s ALLOW_MEMORY_GROWTH=1 -s NO_EXIT_RUNTIME=1 -s TOTAL_MEMORY=33554432 -s ERROR_ON_UNDEFINED_SYMBOLS=1
 
 APP := nukedb_app # Native app name (not built in this configuration)
 # SRC := src/nuke_flight.c src/server.c # Removed native app source

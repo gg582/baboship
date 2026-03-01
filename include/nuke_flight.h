@@ -7,6 +7,7 @@
 
 #ifdef __EMSCRIPTEN__
 #include <sys/types.h>
+#include <pthread.h>
 typedef void sqlite3;
 typedef struct { void *conn; } cwist_db;
 typedef struct { void *q; } cwist_io_queue;
