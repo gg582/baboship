@@ -9,8 +9,9 @@ const state = {
   bestWorker: null,
   bestRequestId: 0,
   isMobile: false,
-  uiMode: 'manual',
+  uiMode: 'tracking',
   trackingEventsIntl: [],
+  trackingEtaIntl: null,
   wasmUnavailableReason: '',
   nativeMode: false,
   nativeHealth: null,
@@ -146,6 +147,64 @@ const TRACKER_API_KEY = trackerConfig.trackerApiKey || '';
 const ORS_API_KEY = trackerConfig.orsApiKey || ''; // Placeholder for ORS API Key
 const ORS_BASE_URL = 'https://api.openrouteservice.org/v2/directions/driving-car'; // ORS Directions API
 
+const TRANSPORT_SPEED_KMH = {
+  air: 780,
+  sea: 36,
+  land: 65
+};
+
+const MODE_LABELS = {
+  air: '항공',
+  sea: '선박',
+  land: '내륙'
+};
+
+const DEFAULT_DESTINATION_ISO = 'KR';
+
+const COUNTRY_HUBS = {
+  AE: { code: 'DXB', mode: 'air' },
+  AU: { code: 'SYD', mode: 'air' },
+  BR: { code: 'GRU', mode: 'air' },
+  CA: { code: 'YYZ', mode: 'air' },
+  CL: { code: 'SCL', mode: 'air' },
+  CN: { code: 'PVG', mode: 'air' },
+  DE: { code: 'FRA', mode: 'air' },
+  ES: { code: 'MAD', mode: 'air' },
+  FI: { code: 'HEL', mode: 'air' },
+  FR: { code: 'CDG', mode: 'air' },
+  GB: { code: 'LHR', mode: 'air' },
+  HK: { code: 'HKG', mode: 'air' },
+  IN: { code: 'DEL', mode: 'air' },
+  IT: { code: 'FCO', mode: 'air' },
+  JP: { code: 'NRT', mode: 'air' },
+  KR: { code: 'ICN', mode: 'air' },
+  MX: { code: 'MEX', mode: 'air' },
+  MY: { code: 'KUL', mode: 'air' },
+  NL: { code: 'AMS', mode: 'air' },
+  PH: { code: 'MNL', mode: 'air' },
+  QA: { code: 'DOH', mode: 'air' },
+  RU: { code: 'SVO', mode: 'air' },
+  SA: { code: 'RUH', mode: 'air' },
+  SE: { code: 'ARN', mode: 'air' },
+  SG: { code: 'SIN', mode: 'air' },
+  TH: { code: 'BKK', mode: 'air' },
+  TR: { code: 'IST', mode: 'air' },
+  US: { code: 'JFK', mode: 'air' },
+  VN: { code: 'SGN', mode: 'air' },
+  ZA: { code: 'JNB', mode: 'air' }
+};
+
+const HARD_CODED_NODE_FALLBACKS = {
+  ICN: { code: 'ICN', lat: 37.4692, lon: 126.4505, layer: 'air' },
+  JFK: { code: 'JFK', lat: 40.6413, lon: -73.7781, layer: 'air' },
+  PVG: { code: 'PVG', lat: 31.1443, lon: 121.8083, layer: 'air' },
+  FRA: { code: 'FRA', lat: 50.0379, lon: 8.5622, layer: 'air' },
+  LHR: { code: 'LHR', lat: 51.4700, lon: -0.4543, layer: 'air' }
+};
+
+const SEA_KEYWORDS = [/PORT/i, /TERMINAL/i, /WHARF/i, /부두/, /항\b/, /碼頭/];
+const LAND_KEYWORDS = [/허브/, /센터/, /물류/, /소포/, /delivery/i, /hub/i];
+const DELIVERED_PATTERNS = [/배달완료/, /배송완료/, /수취완료/, /delivered/i];
 function clampNumber(value, min, max) {
   const num = Number(value);
   if (Number.isNaN(num)) return min;
@@ -407,13 +466,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const bestToContinentSelect = document.getElementById('best-to-continent');
   const mapModal = document.getElementById('map-modal');
   const modalCloseBtn = document.getElementById('map-modal-close');
-  const trackingNumberInputIntl = document.getElementById('tracking-number-intl');
-  const trackingFetchBtnIntl = document.getElementById('tracking-fetch-btn-intl');
-  const trackingLogInputIntl = document.getElementById('tracking-log-input-intl');
-  const trackingAnalyzeBtnIntl = document.getElementById('tracking-analyze-btn-intl');
-  const trackingStatusIntl = document.getElementById('tracking-status-intl');
-  const trackingMetricsIntl = document.getElementById('tracking-metrics-intl');
-  const trackingTimelineIntl = document.getElementById('tracking-timeline-intl');
+  const trackingNumberInputIntl = document.getElementById('tracking-number-intl') || document.getElementById('tracking-number');
+  const trackingFetchBtnIntl = document.getElementById('tracking-fetch-btn-intl') || document.getElementById('tracking-fetch-btn');
+  const trackingLogInputIntl = document.getElementById('tracking-log-input-intl') || document.getElementById('tracking-log-input');
+  const trackingAnalyzeBtnIntl = document.getElementById('tracking-analyze-btn-intl') || document.getElementById('tracking-analyze-btn');
+  const trackingStatusIntl = document.getElementById('tracking-status-intl') || document.getElementById('tracking-status');
+  const trackingMetricsIntl = document.getElementById('tracking-metrics-intl') || document.getElementById('tracking-metrics');
+  const trackingTimelineIntl = document.getElementById('tracking-timeline-intl') || document.getElementById('tracking-timeline');
+  const trackingMetricsDomestic = document.getElementById('tracking-metrics-domestic');
+  const trackingStatusDomestic = document.getElementById('tracking-status-domestic');
+  const trackingFetchBtnDomestic = document.getElementById('tracking-fetch-btn-domestic');
 
   // --- MapLibre GL JS Integration ---
   function initMap(containerId, isModal = false) {
@@ -673,6 +735,214 @@ document.addEventListener('DOMContentLoaded', () => {
     return '';
   }
 
+  function getHubNode(code, iso, preferredLayer) {
+    if (!code) return null;
+    const normalizedIso = (iso || DEFAULT_DESTINATION_ISO).trim().toUpperCase() || DEFAULT_DESTINATION_ISO;
+    const node = state.nodeMap.get(code);
+    if (node) {
+      return {
+        code: node.code,
+        lat: node.lat,
+        lon: node.lon,
+        layer: node.layer || preferredLayer || 'air',
+        iso: normalizedIso
+      };
+    }
+    if (HARD_CODED_NODE_FALLBACKS[code]) {
+      const fallback = HARD_CODED_NODE_FALLBACKS[code];
+      return {
+        code: fallback.code,
+        lat: fallback.lat,
+        lon: fallback.lon,
+        layer: fallback.layer || preferredLayer || 'air',
+        iso: normalizedIso
+      };
+    }
+    return null;
+  }
+
+  function resolveCountryHubNode(iso) {
+    const normalized = (iso || DEFAULT_DESTINATION_ISO).trim().toUpperCase() || DEFAULT_DESTINATION_ISO;
+    const hub = COUNTRY_HUBS[normalized] || COUNTRY_HUBS[DEFAULT_DESTINATION_ISO];
+    if (!hub) return null;
+    return getHubNode(hub.code, normalized, hub.mode);
+  }
+
+  function inferLayerFromAlias(alias, locationName) {
+    const combined = `${alias || ''} ${locationName || ''}`.toUpperCase();
+    if (SEA_KEYWORDS.some((pattern) => pattern.test(combined))) {
+      return 'sea';
+    }
+    if (LAND_KEYWORDS.some((pattern) => pattern.test(combined))) {
+      return 'land';
+    }
+    return 'air';
+  }
+
+  function isDeliveredEvent(evt) {
+    if (!evt) return false;
+    const text = (evt.statusText || '').toLowerCase();
+    if (DELIVERED_PATTERNS.some((pattern) => pattern.test(text))) return true;
+    const code = (evt.statusCode || '').toLowerCase();
+    return code === 'delivered' || code === 'complete';
+  }
+
+  function hasSeaHint(evt) {
+    if (!evt) return false;
+    const text = `${evt.alias || ''} ${evt.locationName || ''} ${evt.statusText || ''}`.toUpperCase();
+    return SEA_KEYWORDS.some((pattern) => pattern.test(text));
+  }
+
+  function determineFutureMode(lastEvent, destination, events) {
+    if (!lastEvent || !destination) return 'air';
+    if (lastEvent.layer === 'sea' || destination.layer === 'sea' || hasSeaHint(lastEvent)) {
+      return 'sea';
+    }
+    const lastIso = (lastEvent.countryCode || '').toUpperCase();
+    if (destination.iso && destination.iso === lastIso) {
+      return 'land';
+    }
+    if (events && events.some((evt) => evt.layer === 'sea')) {
+      return 'sea';
+    }
+    if (lastEvent.layer === 'land') return 'land';
+    return 'air';
+  }
+
+  function computePendingProcessingHours(evt) {
+    if (!evt) return 0;
+    const text = (evt.statusText || '').toLowerCase();
+    let hours = 0;
+    if (/교환국/.test(text)) {
+      if (/도착|접수/.test(text) && !/완료|통과/.test(text)) {
+        hours += 18;
+      } else {
+        hours += 8;
+      }
+    }
+    if (/통관/.test(text)) {
+      hours += /완료/.test(text) ? 4 : 14;
+    }
+    if (/배달준비|배송준비|집배준비/.test(text)) {
+      hours += 6;
+    }
+    if (/배달중/.test(text)) {
+      hours += 3;
+    }
+    return hours;
+  }
+
+  function determineLastMileHours(targetIso, lastIso) {
+    const normalizedTarget = (targetIso || DEFAULT_DESTINATION_ISO).toUpperCase();
+    const normalizedLast = (lastIso || '').toUpperCase();
+    if (normalizedTarget === 'KR' && normalizedLast === 'KR') {
+      return 8;
+    }
+    if (normalizedTarget && normalizedTarget === normalizedLast) {
+      return 6;
+    }
+    return 12;
+  }
+
+  function computeEtaConfidence(eventCount, remainingDistance) {
+    if (eventCount >= 5 && remainingDistance < 500) return '높음';
+    if (eventCount >= 3 && remainingDistance < 3500) return '중간';
+    return '낮음';
+  }
+
+  function buildEtaReason(detail) {
+    const parts = [];
+    if (detail.remainingDistance && detail.remainingDistance > 5) {
+      const rounded = Math.round(detail.remainingDistance);
+      const kmLabel = `${rounded.toLocaleString()} km`;
+      parts.push(`남은거리 ${kmLabel} (${MODE_LABELS[detail.mode] || detail.mode})`);
+    }
+    if (detail.processingHours) {
+      parts.push(`교환국/통관 ${Math.round(detail.processingHours)}시간`);
+    }
+    if (detail.lastMileHours) {
+      parts.push(`라스트마일 ${Math.round(detail.lastMileHours)}시간`);
+    }
+    return parts.join(' · ') || '휴리스틱 추정치';
+  }
+
+  function resolveDestinationHub(events, lastEvent) {
+    const isoCounts = new Map();
+    for (const evt of events || []) {
+      const iso = (evt.countryCode || '').trim().toUpperCase();
+      if (iso) {
+        isoCounts.set(iso, (isoCounts.get(iso) || 0) + 1);
+      }
+    }
+    const hasKorea = isoCounts.has('KR');
+    const hasForeign = Array.from(isoCounts.keys()).some((code) => code !== 'KR');
+    let targetIso = '';
+    if (hasKorea && hasForeign) {
+      targetIso = 'KR';
+    } else if (lastEvent && lastEvent.countryCode) {
+      targetIso = lastEvent.countryCode.toUpperCase();
+    } else if (isoCounts.size) {
+      const [candidate] = [...isoCounts.entries()].sort((a, b) => b[1] - a[1]);
+      targetIso = candidate ? candidate[0] : '';
+    }
+    if (!targetIso) targetIso = DEFAULT_DESTINATION_ISO;
+    const destination = resolveCountryHubNode(targetIso);
+    if (destination) return destination;
+    if (targetIso !== DEFAULT_DESTINATION_ISO) {
+      return resolveCountryHubNode(DEFAULT_DESTINATION_ISO);
+    }
+    return null;
+  }
+
+  function estimateDeliveryEta(events) {
+    if (!Array.isArray(events) || events.length === 0) return null;
+    if (events.some((evt) => isDeliveredEvent(evt))) {
+      return { delivered: true };
+    }
+    const enrichable = events.filter((evt) => (
+      typeof evt.timestampMs === 'number' &&
+      typeof evt.lat === 'number' &&
+      typeof evt.lon === 'number' &&
+      Number.isFinite(evt.timestampMs) &&
+      Number.isFinite(evt.lat) &&
+      Number.isFinite(evt.lon)
+    ));
+    if (!enrichable.length) return null;
+    const sorted = enrichable.slice().sort((a, b) => a.timestampMs - b.timestampMs);
+    const lastEvent = sorted[sorted.length - 1];
+    const destination = resolveDestinationHub(events, lastEvent);
+    if (!destination || typeof lastEvent.timestampMs !== 'number') return null;
+    let remainingDistance = 0;
+    if (typeof lastEvent.lat === 'number' && typeof lastEvent.lon === 'number') {
+      remainingDistance = haversineKm(lastEvent.lat, lastEvent.lon, destination.lat, destination.lon);
+    }
+    if (!Number.isFinite(remainingDistance)) remainingDistance = 0;
+    const futureMode = determineFutureMode(lastEvent, destination, events);
+    const speed = TRANSPORT_SPEED_KMH[futureMode] || TRANSPORT_SPEED_KMH.air;
+    const remainingTravelHours = remainingDistance > 5 ? (remainingDistance / speed) : 0;
+    const processingHours = computePendingProcessingHours(lastEvent);
+    const lastMileHours = determineLastMileHours(destination.iso, lastEvent.countryCode);
+    const etaHours = remainingTravelHours + processingHours + lastMileHours;
+    if (!Number.isFinite(etaHours)) return null;
+    const etaTimestamp = lastEvent.timestampMs + (etaHours * 3600 * 1000);
+    return {
+      delivered: false,
+      etaTimestamp,
+      etaDisplay: formatTimelineTime(new Date(etaTimestamp)),
+      remainingKm: remainingDistance,
+      transportMode: futureMode,
+      processingHours,
+      lastMileHours,
+      confidence: computeEtaConfidence(sorted.length, remainingDistance),
+      reason: buildEtaReason({
+        remainingDistance,
+        mode: futureMode,
+        processingHours,
+        lastMileHours
+      })
+    };
+  }
+
   function normalizeTrackingLocation(name, code, isoCode) {
     const normalizedIso = (isoCode || '').trim().toUpperCase();
     const candidates = [code, name, normalizedIso].filter(Boolean);
@@ -801,11 +1071,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
       let lat = null;
       let lon = null;
+      let layer = null;
       // Attempt to resolve lat/lon from state.nodeMap using the alias
       const resolvedNode = state.nodeMap.get(alias);
       if (resolvedNode) {
         lat = resolvedNode.lat;
         lon = resolvedNode.lon;
+        layer = resolvedNode.layer || layer;
+      }
+      if ((lat === null || lon === null) && progress?.location?.lat && progress?.location?.lon) {
+        lat = Number(progress.location.lat);
+        lon = Number(progress.location.lon);
+      }
+      if (!layer) {
+        layer = inferLayerFromAlias(alias, location);
       }
 
       return {
@@ -817,6 +1096,8 @@ document.addEventListener('DOMContentLoaded', () => {
         timestampToken: token,
         safetyStatus: progress?.safetyStatus || 'UNKNOWN', // Assuming safety status from API
         displayTime: formatTimelineTime(date),
+        timestampMs: date ? date.getTime() : null,
+        layer,
         lat, // Added latitude
         lon, // Added longitude
         raw: progress
@@ -882,32 +1163,53 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     const formatPercent = (value) => (value * 100).toFixed(1) + '%';
-    metricsElement.innerHTML = `
+    const parts = [
+      `
       <div class="metric">
         <span>경유 노드</span>
         <strong>${result.nodes ?? '--'}</strong>
-      </div>
+      </div>`,
+      `
       <div class="metric">
         <span>직선 거리</span>
         <strong>${result.directKm?.toFixed ? result.directKm.toFixed(1) + ' km' : '--'}</strong>
-      </div>
+      </div>`,
+      `
       <div class="metric">
         <span>실제 이동</span>
         <strong>${result.traveledKm?.toFixed ? result.traveledKm.toFixed(1) + ' km' : '--'}</strong>
-      </div>
+      </div>`,
+      `
       <div class="metric">
         <span>경로 페널티</span>
         <strong>${result.routePenalty !== undefined ? formatPercent(result.routePenalty) : '--'}</strong>
-      </div>
+      </div>`,
+      `
       <div class="metric">
         <span>대기 페널티</span>
         <strong>${result.dwellPenalty !== undefined ? formatPercent(result.dwellPenalty) : '--'}</strong>
-      </div>
+      </div>`,
+      `
       <div class="metric">
         <span>EDI 스코어</span>
         <strong>${result.idiotScore !== undefined ? result.idiotScore.toFixed(1) : '--'}</strong>
-      </div>
-    `;
+      </div>`
+    ];
+    if (result.eta && !result.eta.delivered && result.eta.etaDisplay) {
+      parts.push(`
+      <div class="metric eta">
+        <span>예상 배송완료</span>
+        <strong>${result.eta.etaDisplay}</strong>
+        ${result.eta.reason ? `<small>${result.eta.reason}</small>` : ''}
+      </div>`);
+      parts.push(`
+      <div class="metric">
+        <span>추정 신뢰도</span>
+        <strong>${result.eta.confidence || '중간'}</strong>
+        ${result.eta.transportMode ? `<small>${MODE_LABELS[result.eta.transportMode] || result.eta.transportMode} 기준</small>` : ''}
+      </div>`);
+    }
+    metricsElement.innerHTML = parts.join('');
   }
 
   function renderTrackingTimeline(timelineElement, events) {
@@ -941,11 +1243,17 @@ document.addEventListener('DOMContentLoaded', () => {
       setTrackingStatus(trackingStatusIntl, '분석할 이벤트 문자열이 없습니다.', 'error');
       return;
     }
+    const etaInfo = estimateDeliveryEta(state.trackingEventsIntl);
+    state.trackingEtaIntl = etaInfo || null;
     if (state.kernel && typeof state.kernel.analyzeTracking === 'function') {
       try {
         const result = JSON.parse(state.kernel.analyzeTracking(payload));
+        if (etaInfo && !etaInfo.delivered) {
+          result.eta = etaInfo;
+        }
         renderTrackingMetrics(trackingMetricsIntl, result);
-        setTrackingStatus(trackingStatusIntl, `분석 완료: EDI ${result.idiotScore?.toFixed ? result.idiotScore.toFixed(1) : '--'}`, 'success');
+        const etaLabel = (etaInfo && !etaInfo.delivered && etaInfo.etaDisplay) ? ` · ETA ${etaInfo.etaDisplay}` : '';
+        setTrackingStatus(trackingStatusIntl, `분석 완료: EDI ${result.idiotScore?.toFixed ? result.idiotScore.toFixed(1) : '--'}${etaLabel}`, 'success');
       } catch (err) {
         setTrackingStatus(trackingStatusIntl, '분석 실패: ' + err.message, 'error');
       }
@@ -955,8 +1263,12 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         setTrackingStatus(trackingStatusIntl, '서버 분석 중...');
         const result = await analyzeTrackingNative(payload);
+        if (etaInfo && !etaInfo.delivered) {
+          result.eta = etaInfo;
+        }
         renderTrackingMetrics(trackingMetricsIntl, result);
-        setTrackingStatus(trackingStatusIntl, `분석 완료: EDI ${result.idiotScore?.toFixed ? result.idiotScore.toFixed(1) : '--'}`, 'success');
+        const etaLabel = (etaInfo && !etaInfo.delivered && etaInfo.etaDisplay) ? ` · ETA ${etaInfo.etaDisplay}` : '';
+        setTrackingStatus(trackingStatusIntl, `분석 완료: EDI ${result.idiotScore?.toFixed ? result.idiotScore.toFixed(1) : '--'}${etaLabel}`, 'success');
       } catch (err) {
         setTrackingStatus(trackingStatusIntl, '분석 실패: ' + err.message, 'error');
       }
@@ -973,6 +1285,7 @@ document.addEventListener('DOMContentLoaded', () => {
       trackingNumberInputIntl.focus();
       return;
     }
+    state.trackingEtaIntl = null;
     const carriers = resolveKoreaPostCarriers(invoice);
     const carrierLabels = carriers.map(c => c.label).join(', ');
     setTrackingStatus(trackingStatusIntl, `한국 우체국 (${carrierLabels})에서 조회 중...`);

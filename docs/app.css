@@ -205,6 +205,11 @@ body {
     font-size: 1.35rem;
 }
 
+.tracking-metrics .metric small {
+    font-size: 0.75rem;
+    color: var(--muted);
+}
+
 .tracking-timeline {
     border: 1px solid var(--card-border);
     border-left: 3px solid var(--accent);

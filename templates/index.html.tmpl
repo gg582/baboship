@@ -22,18 +22,17 @@
                 <p>우체국 송장 추적과 공항 경로 설계를 한 화면에서 전환하세요.</p>
             </div>
             <div class="mode-tabs" role="tablist" aria-label="화물 분석 모드">
-                <button type="button" class="mode-tab" data-mode-tab="tracking" role="tab" aria-controls="tracking-panel" aria-selected="false">송장번호로 물류 추적</button>
-                <button type="button" class="mode-tab active" data-mode-tab="manual" role="tab" aria-controls="manual-panel" aria-selected="true">수동으로 공항 선택</button>
+                <button type="button" class="mode-tab active" data-mode-tab="tracking" role="tab" aria-controls="tracking-panel" aria-selected="true">EMS 경로 효율</button>
+                <button type="button" class="mode-tab" data-mode-tab="manual" role="tab" aria-controls="manual-panel" aria-selected="false">수동으로 공항 선택</button>
             </div>
         </header>
 
-        <section class="panel hidden tracking-panel" id="tracking-panel" data-panel="tracking">
+        <section class="panel tracking-panel" id="tracking-panel" data-panel="tracking">
             <div class="card tracking-card">
                 <div class="tracking-header">
                     <div>
-                        <div class="pill soft">우체국 EMS 베타</div>
-                        <h2>송장번호로 물류 추적</h2>
-                        <p>송장 번호를 입력하면 한국 우체국 EMS 이벤트를 불러와 WebAssembly 엔진으로 경로 효율을 계산합니다.</p>
+                        <h2>EMS 경로 효율 분석</h2>
+                        <p>송장 번호를 입력하면 한국 우체국 EMS 이벤트를 불러와 WebAssembly 엔진과 운송 휴리스틱으로 경로 효율과 예상 완료일을 계산합니다.</p>
                     </div>
                     <div class="tracking-actions">
                         <label>
@@ -62,7 +61,7 @@
             </div>
         </section>
 
-        <main class="layout panel manual-panel" id="manual-panel" data-panel="manual">
+        <main class="layout panel hidden manual-panel" id="manual-panel" data-panel="manual">
             <section class="card hero-card">
                 <div class="pill">{{ hero_pill }}</div>
                 <h1>{{ app_name }}</h1>
