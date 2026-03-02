@@ -1321,18 +1321,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     throw new Error(getWasmUnavailableMessage());
   }
-    if (state.kernel) {
-      const data = JSON.parse(state.kernel.searchRoutes(from, to, maxTransfers));
-      if (Array.isArray(data.paths) && maxResults) {
-        data.paths = data.paths.slice(0, maxResults);
-      }
-      return data;
-    }
-    if (state.nativeMode) {
-      return fetchNativeRoutes(from, to, maxTransfers, maxResults || 16);
-    }
-    throw new Error(getWasmUnavailableMessage());
-  }
 
   async function searchRoutes() {
     const from = fromInput.value.trim().toUpperCase();
@@ -1433,7 +1421,6 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Call init() last
   init();
-});
 
 async function init() {
   // Detect mobile device
@@ -1859,73 +1846,10 @@ async function requestBestTo() {
     try {
       const data = await computeBestDestinations(toCode, continent);
       renderBestDestinations(bestToResults, data);
-    } catch (err) {
-      bestToResults.innerHTML = `<div class="empty-state">${err.message}</div>`;
-    }
-    bestToResults.classList.remove('loading');
+  } catch (err) {
+    bestToResults.innerHTML = `<div class="empty-state">${err.message}</div>`;
   }
+  bestToResults.classList.remove('loading');
 }
-
-async function init() {
-  // Detect mobile device
-  state.isMobile = detectMobile();
-  
-  await initServiceWorker();
-  const wasmReady = await initWasm();
-  let nativeReady = false;
-  if (!wasmReady) {
-    nativeReady = await enableNativeMode();
-    if (!nativeReady) {
-      applyWasmDisabledUi();
-    }
-  }
-
-  // Initialize MapLibre maps
-  mainMapLibre = initMap('map-container');
-  modalMapLibre = initMap('map-container-large', true);
-
-  if (wasmReady) {
-    try {
-      state.bestWorker = new Worker(assetPaths.workerScript, { type: 'module' });
-      state.bestWorker.onmessage = (e) => {
-        const msg = e.data;
-        if (msg.type === 'init') {
-          if (msg.ok) console.log('Best-destinations worker ready');
-          else console.warn('Best-destinations worker init failed:', msg.error);
-          return;
-        }
-        if (msg.type === 'result') {
-          const fromCode = fromInput.value.trim().toUpperCase();
-          const toCode = toInput.value.trim().toUpperCase();
-          if (msg.originCode === fromCode) {
-            renderBestDestinations(bestFromResults, msg.data);
-            bestFromResults.classList.remove('loading');
-          }
-          if (msg.originCode === toCode) {
-            renderBestDestinations(bestToResults, msg.data);
-            bestToResults.classList.remove('loading');
-          }
-          return;
-        }
-        if (msg.type === 'error') {
-          console.warn('Best-destinations worker error:', msg.error);
-        }
-      };
-      state.bestWorker.postMessage({ type: 'compute_init', nodes: state.nodes }); // Pass nodes to worker
-    } catch (err) {
-      console.warn('Web Worker not available:', err);
-    }
-  }
-
-  if (wasmReady && state.kernel) {
-    const h = JSON.parse(state.kernel.getHealth());
-    statRoutes.textContent = h.routes_loaded.toLocaleString();
-    statWorkers.textContent = 'WASM-Serverless';
-  } else if (state.nativeMode && state.nativeHealth) {
-    if (statRoutes && typeof state.nativeHealth.routes_loaded === 'number') {
-      statRoutes.textContent = h.routes_loaded.toLocaleString();
-    }
-  } else if (statRoutes) {
-    statRoutes.textContent = '--';
-  }
 }
+});
