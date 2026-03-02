@@ -3,6 +3,9 @@ import struct
 import sys
 import os
 
+## NukeDB uses fast database access via mmap and in-memory file dump.
+## Please use standard SQL if you'd like to keep canonical behavior.
+
 def export_db(db_path, out_path):
     if not os.path.exists(db_path):
         print(f"Error: {db_path} not found")

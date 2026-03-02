@@ -6,6 +6,9 @@ import sqlite3
 from pathlib import Path
 from typing import Dict, Tuple, List, Any
 
+## NOTE: This database is mainly used when tracking EMS parcel.
+## Please be careful if you want to replace OpenFlights with other database.
+## Recommendation: Merge other databases into OpenFlights format.
 
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0

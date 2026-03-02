@@ -2,6 +2,16 @@
 import sqlite3
 from pathlib import Path
 
+###################################################
+##             !!!!!! WARNING !!!!!!             ##
+###################################################
+## This is a sample script of a parcel database. ##
+## Don't use this on production.                 ##
+## Please use automated deploy script with       ##
+## uploaded GitHub Actions.                      ##
+## (C) Lee Yunjin, 2026.                         ##
+###################################################
+
 AIRPORTS = [
     (1, "JFK", "New York JFK", "United States", 40.6413, -73.7781),
     (2, "LHR", "London Heathrow", "United Kingdom", 51.4700, -0.4543),

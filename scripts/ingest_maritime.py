@@ -7,6 +7,9 @@ import sqlite3
 from pathlib import Path
 from typing import Dict, Tuple, List, Any
 
+## This automatically ingests marine database.
+## NOTE: This is yet experimental.
+## This may not be accurate as openflights database.
 
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0

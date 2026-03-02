@@ -9,6 +9,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$ROOT_DIR/.venv-generate"
 PYTHON="$VENV_DIR/bin/python"
 
+echo "Running BaboShip Installer Script...Please be patient."
+
 log() {
   printf '[baboship] %s\n' "$*"
 }
