@@ -654,7 +654,12 @@ document.addEventListener('DOMContentLoaded', () => {
       let data;
       // When WASM is ready, use the WASM kernel to get nodes data
       if (state.kernel && typeof state.kernel.getNodes === 'function') {
-        data = JSON.parse(state.kernel.getNodes());
+        try {
+          data = JSON.parse(state.kernel.getNodes());
+        } catch (err) {
+          console.warn('WASM nodes JSON parse failed, falling back to airports.json:', err);
+          data = { nodes: await fetchJsonOrError('./airports.json') };
+        }
       } else if (state.nativeMode) {
         // Fallback to native server if WASM not available
         data = await fetchJsonOrError('./nodes?limit=8192'); // Assuming a /nodes endpoint
