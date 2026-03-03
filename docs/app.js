@@ -205,8 +205,14 @@ const HARD_CODED_NODE_FALLBACKS = {
 };
 
 const MALFORMED_JSON_REPAIR_MODULE_URL = 'https://cdn.jsdelivr.net/npm/jsonrepair@3.11.0/+esm';
+const CALENDAR_LIB_MODULE_URL = 'https://cdn.jsdelivr.net/npm/dayjs@1.11.13/+esm';
 let jsonRepairFunction = null;
 let jsonRepairImportPromise = null;
+let dayjsFunction = null;
+let dayjsImportPromise = null;
+const TOP_ROUTE_MAX_TRANSFERS = 5;
+const TOP_ROUTE_CANDIDATE_LIMIT = 24;
+const TOP_ROUTE_TAKE = 5;
 
 const SEA_KEYWORDS = [/PORT/i, /TERMINAL/i, /WHARF/i, /부두/, /항\b/, /碼頭/];
 const LAND_KEYWORDS = [/허브/, /센터/, /물류/, /소포/, /delivery/i, /hub/i];
@@ -272,6 +278,26 @@ async function parseJsonWithRecovery(raw, context = 'JSON') {
     }
     throw parseErr;
   }
+}
+
+async function loadDayjsFunction() {
+  if (dayjsFunction) return dayjsFunction;
+  if (!dayjsImportPromise) {
+    dayjsImportPromise = import(CALENDAR_LIB_MODULE_URL)
+      .then((mod) => {
+        if (typeof mod?.default === 'function') {
+          dayjsFunction = mod.default;
+          return dayjsFunction;
+        }
+        throw new Error('dayjs default export is unavailable');
+      })
+      .catch((err) => {
+        console.warn('dayjs 로드 실패, 기본 날짜 포맷으로 대체:', err);
+        dayjsImportPromise = null;
+        return null;
+      });
+  }
+  return dayjsImportPromise;
 }
 
 async function fetchNativeRoutes(from, to, maxTransfers, maxResults) {
@@ -940,7 +966,13 @@ document.addEventListener('DOMContentLoaded', () => {
       parts.push(`라스트마일 ${Math.round(detail.lastMileHours)}시간`);
     }
     if (detail.routeDistanceMinKm && detail.routeDistanceMaxKm) {
-      parts.push(`Top5 항공거리 ${Math.round(detail.routeDistanceMinKm).toLocaleString()}~${Math.round(detail.routeDistanceMaxKm).toLocaleString()} km`);
+      parts.push(`Top-5 항공거리 ${Math.round(detail.routeDistanceMinKm).toLocaleString()}~${Math.round(detail.routeDistanceMaxKm).toLocaleString()} km`);
+    }
+    if (detail.currentPositionText) {
+      parts.push(detail.currentPositionText);
+    }
+    if (detail.remainingRangeMinKm && detail.remainingRangeMaxKm) {
+      parts.push(`남은거리 ${Math.round(detail.remainingRangeMinKm).toLocaleString()}~${Math.round(detail.remainingRangeMaxKm).toLocaleString()} km`);
     }
     return parts.join(' · ') || '휴리스틱 추정치';
   }
@@ -994,6 +1026,25 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
     return Number.isFinite(sum) ? sum : 0;
+  }
+
+  async function formatEtaDateRangeText(startTimestamp, endTimestamp) {
+    if (!Number.isFinite(startTimestamp)) return '';
+    const safeEnd = Number.isFinite(endTimestamp) ? endTimestamp : startTimestamp;
+    const formatNative = (timestamp) => {
+      const date = new Date(timestamp);
+      return `${date.getMonth() + 1}월${date.getDate()}일`;
+    };
+    const dayjs = await loadDayjsFunction();
+    if (typeof dayjs !== 'function') {
+      return `${formatNative(startTimestamp)}-${formatNative(safeEnd)} 내`;
+    }
+    const from = dayjs(startTimestamp);
+    const to = dayjs(safeEnd);
+    if (!from.isValid() || !to.isValid()) {
+      return `${formatNative(startTimestamp)}-${formatNative(safeEnd)} 내`;
+    }
+    return `${from.format('M월D일')}-${to.format('M월D일')} 내`;
   }
 
   function resolveDestinationHub(events, lastEvent) {
@@ -1058,16 +1109,27 @@ document.addEventListener('DOMContentLoaded', () => {
     let etaRangeDisplay = '';
     let routeDistanceMinKm = 0;
     let routeDistanceMaxKm = 0;
+    const observedDistanceBase = computeObservedDistanceKm(sorted);
+    let remainingRangeMinKm = remainingDistance;
+    let remainingRangeMaxKm = remainingDistance;
+    const totalProjectedBaseKm = observedDistanceBase + remainingDistance;
+    const baseProgressRatio = totalProjectedBaseKm > 0 ? clampNumber(observedDistanceBase / totalProjectedBaseKm, 0, 1) : 0;
+    let currentPositionText = `현재 예상 위치 약 ${Math.round(baseProgressRatio * 100)}% 지점`;
     if (routeHint?.originCode && routeHint?.destinationCode && (state.kernel || state.nativeMode)) {
       try {
-        const routeData = await runRouteSearch(routeHint.originCode, routeHint.destinationCode, 5, 24);
+        const routeData = await runRouteSearch(
+          routeHint.originCode,
+          routeHint.destinationCode,
+          TOP_ROUTE_MAX_TRANSFERS,
+          TOP_ROUTE_CANDIDATE_LIMIT
+        );
         const paths = Array.isArray(routeData?.paths) ? routeData.paths : [];
         const topCandidates = paths
           .filter((path) => Number.isFinite(path?.totalDistanceKm) && path.totalDistanceKm > 0)
           .sort((a, b) => a.totalDistanceKm - b.totalDistanceKm)
-          .slice(0, 5);
+          .slice(0, TOP_ROUTE_TAKE);
         if (topCandidates.length) {
-          const observedDistance = computeObservedDistanceKm(sorted);
+          const observedDistance = observedDistanceBase;
           routeDistanceMinKm = topCandidates[0].totalDistanceKm;
           routeDistanceMaxKm = topCandidates[topCandidates.length - 1].totalDistanceKm;
           const etaHoursByCandidate = topCandidates.map((candidate) => {
@@ -1080,22 +1142,26 @@ document.addEventListener('DOMContentLoaded', () => {
           const minTimestamp = lastEvent.timestampMs + (minHours * 3600 * 1000);
           const maxTimestamp = lastEvent.timestampMs + (maxHours * 3600 * 1000);
           etaTimestamp = minTimestamp;
-          const minDays = Math.max(1, Math.ceil(minHours / 24));
-          const maxDays = Math.max(minDays, Math.ceil(maxHours / 24));
-          etaRangeDisplay = `${minDays}일~${maxDays}일`;
-          if (maxTimestamp > minTimestamp) {
-            etaRangeDisplay += ` (${formatTimelineTime(new Date(minTimestamp))} ~ ${formatTimelineTime(new Date(maxTimestamp))})`;
-          }
+          remainingRangeMinKm = Math.max(routeDistanceMinKm - observedDistance, 0);
+          remainingRangeMaxKm = Math.max(routeDistanceMaxKm - observedDistance, 0);
+          const projectedTotalKm = observedDistance + remainingRangeMaxKm;
+          const progressRatio = projectedTotalKm > 0 ? clampNumber(observedDistance / projectedTotalKm, 0, 1) : 0;
+          currentPositionText = `현재 예상 위치 약 ${Math.round(progressRatio * 100)}% 지점`;
+          etaRangeDisplay = await formatEtaDateRangeText(minTimestamp, maxTimestamp);
         }
       } catch (err) {
         console.warn('Failed to build Top5 route ETA range:', err);
       }
+    }
+    if (!etaRangeDisplay) {
+      etaRangeDisplay = await formatEtaDateRangeText(etaTimestamp, etaTimestamp);
     }
     return {
       delivered: false,
       etaTimestamp,
       etaDisplay: formatTimelineTime(new Date(etaTimestamp)),
       etaRangeDisplay,
+      observedKm: observedDistanceBase,
       remainingKm: remainingDistance,
       transportMode: futureMode,
       processingHours,
@@ -1107,7 +1173,10 @@ document.addEventListener('DOMContentLoaded', () => {
         processingHours,
         lastMileHours,
         routeDistanceMinKm,
-        routeDistanceMaxKm
+        routeDistanceMaxKm,
+        remainingRangeMinKm,
+        remainingRangeMaxKm,
+        currentPositionText
       })
     };
   }
@@ -1428,7 +1497,8 @@ document.addEventListener('DOMContentLoaded', () => {
           result.eta = etaInfo;
         }
         renderTrackingMetrics(trackingMetricsIntl, result);
-        const etaLabel = (etaInfo && !etaInfo.delivered && etaInfo.etaDisplay) ? ` · ETA ${etaInfo.etaDisplay}` : '';
+        const etaLabel = (etaInfo && !etaInfo.delivered)
+          ? ` · ETA ${etaInfo.etaRangeDisplay || etaInfo.etaDisplay || ''}` : '';
         setTrackingStatus(trackingStatusIntl, `분석 완료: EDI ${result.idiotScore?.toFixed ? result.idiotScore.toFixed(1) : '--'}${etaLabel}`, 'success');
       } catch (err) {
         setTrackingStatus(trackingStatusIntl, '분석 실패: ' + err.message, 'error');
@@ -1443,7 +1513,8 @@ document.addEventListener('DOMContentLoaded', () => {
           result.eta = etaInfo;
         }
         renderTrackingMetrics(trackingMetricsIntl, result);
-        const etaLabel = (etaInfo && !etaInfo.delivered && etaInfo.etaDisplay) ? ` · ETA ${etaInfo.etaDisplay}` : '';
+        const etaLabel = (etaInfo && !etaInfo.delivered)
+          ? ` · ETA ${etaInfo.etaRangeDisplay || etaInfo.etaDisplay || ''}` : '';
         setTrackingStatus(trackingStatusIntl, `분석 완료: EDI ${result.idiotScore?.toFixed ? result.idiotScore.toFixed(1) : '--'}${etaLabel}`, 'success');
       } catch (err) {
         setTrackingStatus(trackingStatusIntl, '분석 실패: ' + err.message, 'error');
@@ -1454,7 +1525,7 @@ document.addEventListener('DOMContentLoaded', () => {
       renderTrackingMetrics(trackingMetricsIntl, {
         nodes: state.trackingEventsIntl.length,
         directKm: etaInfo.remainingKm || 0,
-        traveledKm: computeObservedDistanceKm(state.trackingEventsIntl),
+        traveledKm: etaInfo.observedKm ?? computeObservedDistanceKm(state.trackingEventsIntl),
         routePenalty: 0,
         dwellPenalty: 0,
         idiotScore: 0,
