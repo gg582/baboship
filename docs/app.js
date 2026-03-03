@@ -252,6 +252,10 @@ async function parseJsonWithRecovery(raw, context = 'JSON') {
           jsonRepairFunction = mod.jsonrepair;
         } else if (typeof mod.jsonRepair === 'function') {
           jsonRepairFunction = mod.jsonRepair;
+        } else if (typeof mod.default === 'function') {
+          jsonRepairFunction = mod.default;
+        } else {
+          console.warn('Malformed JSON recovery library has no supported export shape.');
         }
       } catch (loadErr) {
         console.warn('Malformed JSON recovery library load failed:', loadErr);
