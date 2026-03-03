@@ -21,6 +21,7 @@ const state = {
 // Global MapLibre map objects
 let mainMapLibre = null;
 let modalMapLibre = null;
+const MOBILE_BREAKPOINT_WIDTH = 768;
 
 const MapLayerStyle = {
   NODE_CIRCLE: {
@@ -325,7 +326,7 @@ async function fetchORSPath(originCoords, destCoords) {
 
 // Mobile device detection
 function detectMobile() {
-  return window.innerWidth <= 768;
+  return window.innerWidth <= MOBILE_BREAKPOINT_WIDTH;
 }
 
 // WASM Module Loader
