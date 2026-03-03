@@ -442,7 +442,8 @@ button.ghost:hover {
     font-weight: 600;
 }
 
-.map-container {
+.map-container,
+#map-wrapper {
     position: relative;
     border-radius: 0;
     overflow: hidden;

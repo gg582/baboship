@@ -325,11 +325,7 @@ async function fetchORSPath(originCoords, destCoords) {
 
 // Mobile device detection
 function detectMobile() {
-  const userAgent = navigator.userAgent || navigator.vendor || window.opera;
-  const mobileRegex = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i;
-  const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-  const isMobileScreen = window.innerWidth <= 768;
-  return mobileRegex.test(userAgent.toLowerCase()) || (hasTouch && isMobileScreen);
+  return window.innerWidth <= 768;
 }
 
 // WASM Module Loader
@@ -536,6 +532,11 @@ document.addEventListener('DOMContentLoaded', () => {
   function initMap(containerId, isModal = false) {
     const map = new maplibregl.Map({
       container: containerId,
+      dragPan: true,
+      scrollZoom: !state.isMobile,
+      touchZoomRotate: state.isMobile,
+      dragRotate: !state.isMobile,
+      keyboard: !state.isMobile,
       style: {
         version: 8,
         sources: {
