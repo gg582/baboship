@@ -1199,6 +1199,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       const cleaned = candidate.replace(/[^A-Za-z]/g, '').toUpperCase();
+      if (/^[A-Z]{2}[A-Z]{3}[A-Z]$/.test(cleaned)) {
+        const officeAlias = cleaned.slice(2, 5);
+        if (state.nodeMap.has(officeAlias)) return officeAlias;
+      }
       if (cleaned.length >= 6) return cleaned.slice(0, 6);
       if (cleaned.length === 3) return cleaned;
     }
