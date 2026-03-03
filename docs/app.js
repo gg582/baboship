@@ -15,12 +15,14 @@ const state = {
   wasmUnavailableReason: '',
   nativeMode: false,
   nativeHealth: null,
-  nativeDirectCache: new Map()
+  nativeDirectCache: new Map(),
+  trackingRouteHintIntl: null
 };
 
 // Global MapLibre map objects
 let mainMapLibre = null;
 let modalMapLibre = null;
+const MOBILE_BREAKPOINT_WIDTH = 768;
 
 const MapLayerStyle = {
   NODE_CIRCLE: {
@@ -203,8 +205,14 @@ const HARD_CODED_NODE_FALLBACKS = {
 };
 
 const MALFORMED_JSON_REPAIR_MODULE_URL = 'https://cdn.jsdelivr.net/npm/jsonrepair@3.11.0/+esm';
+const CALENDAR_LIB_MODULE_URL = 'https://cdn.jsdelivr.net/npm/dayjs@1.11.13/+esm';
 let jsonRepairFunction = null;
 let jsonRepairImportPromise = null;
+let dayjsFunction = null;
+let dayjsImportPromise = null;
+const TOP_ROUTE_MAX_TRANSFERS = 5;
+const TOP_ROUTE_CANDIDATE_LIMIT = 24;
+const TOP_ROUTE_TAKE = 5;
 
 const SEA_KEYWORDS = [/PORT/i, /TERMINAL/i, /WHARF/i, /부두/, /항\b/, /碼頭/];
 const LAND_KEYWORDS = [/허브/, /센터/, /물류/, /소포/, /delivery/i, /hub/i];
@@ -272,6 +280,26 @@ async function parseJsonWithRecovery(raw, context = 'JSON') {
   }
 }
 
+async function loadDayjsFunction() {
+  if (dayjsFunction) return dayjsFunction;
+  if (!dayjsImportPromise) {
+    dayjsImportPromise = import(CALENDAR_LIB_MODULE_URL)
+      .then((mod) => {
+        if (typeof mod?.default === 'function') {
+          dayjsFunction = mod.default;
+          return dayjsFunction;
+        }
+        throw new Error('dayjs default export is unavailable');
+      })
+      .catch((err) => {
+        console.warn('dayjs 로드 실패, 기본 날짜 포맷으로 대체:', err);
+        dayjsImportPromise = null;
+        return null;
+      });
+  }
+  return dayjsImportPromise;
+}
+
 async function fetchNativeRoutes(from, to, maxTransfers, maxResults) {
   const params = new URLSearchParams({
     from,
@@ -325,11 +353,7 @@ async function fetchORSPath(originCoords, destCoords) {
 
 // Mobile device detection
 function detectMobile() {
-  const userAgent = navigator.userAgent || navigator.vendor || window.opera;
-  const mobileRegex = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i;
-  const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-  const isMobileScreen = window.innerWidth <= 768;
-  return mobileRegex.test(userAgent.toLowerCase()) || (hasTouch && isMobileScreen);
+  return window.innerWidth <= MOBILE_BREAKPOINT_WIDTH;
 }
 
 // WASM Module Loader
@@ -536,6 +560,11 @@ document.addEventListener('DOMContentLoaded', () => {
   function initMap(containerId, isModal = false) {
     const map = new maplibregl.Map({
       container: containerId,
+      dragPan: true,
+      scrollZoom: !state.isMobile,
+      touchZoomRotate: state.isMobile,
+      dragRotate: !state.isMobile,
+      keyboard: !state.isMobile,
       style: {
         version: 8,
         sources: {
@@ -936,7 +965,86 @@ document.addEventListener('DOMContentLoaded', () => {
     if (detail.lastMileHours) {
       parts.push(`라스트마일 ${Math.round(detail.lastMileHours)}시간`);
     }
+    if (detail.routeDistanceMinKm && detail.routeDistanceMaxKm) {
+      parts.push(`Top-5 항공거리 ${Math.round(detail.routeDistanceMinKm).toLocaleString()}~${Math.round(detail.routeDistanceMaxKm).toLocaleString()} km`);
+    }
+    if (detail.currentPositionText) {
+      parts.push(detail.currentPositionText);
+    }
+    if (detail.remainingRangeMinKm && detail.remainingRangeMaxKm) {
+      parts.push(`남은거리 ${Math.round(detail.remainingRangeMinKm).toLocaleString()}~${Math.round(detail.remainingRangeMaxKm).toLocaleString()} km`);
+    }
     return parts.join(' · ') || '휴리스틱 추정치';
+  }
+
+  function extractRouteAlias(candidate, fallbackIso = '') {
+    if (!candidate) return '';
+    if (typeof candidate === 'string') {
+      const trimmed = candidate.trim().toUpperCase();
+      if (trimmed.length === 3 && state.nodeMap.has(trimmed)) return trimmed;
+      return normalizeTrackingLocation(trimmed, trimmed, fallbackIso);
+    }
+    const code = (candidate.code || candidate.id || candidate.iata || '').toString().trim().toUpperCase();
+    if (code.length === 3 && state.nodeMap.has(code)) return code;
+    const name = (candidate.name || candidate.location || candidate.display || '').toString().trim();
+    const iso = (candidate.countryCode || candidate.country || fallbackIso || '').toString().trim().toUpperCase();
+    const alias = normalizeTrackingLocation(name, code, iso);
+    return (alias.length === 3 && state.nodeMap.has(alias)) ? alias : '';
+  }
+
+  function resolveTrackingRouteHint(trackingData, events) {
+    const route = trackingData?.route || trackingData?.summary?.route || {};
+    const originCandidate = trackingData?.from || trackingData?.origin || route?.from || route?.origin || trackingData?.sender;
+    const destinationCandidate = trackingData?.to || trackingData?.destination || route?.to || route?.destination || trackingData?.receiver;
+
+    let originCode = extractRouteAlias(originCandidate);
+    let destinationCode = extractRouteAlias(destinationCandidate);
+    if (!originCode && Array.isArray(events) && events.length) {
+      originCode = extractRouteAlias(events[0]?.alias, events[0]?.countryCode);
+    }
+    if (!destinationCode && Array.isArray(events) && events.length) {
+      const lastEvent = events[events.length - 1];
+      destinationCode = extractRouteAlias(lastEvent?.alias, lastEvent?.countryCode);
+    }
+    if (!originCode || !destinationCode || originCode === destinationCode) return null;
+    return { originCode, destinationCode };
+  }
+
+  function computeObservedDistanceKm(events) {
+    if (!Array.isArray(events) || events.length < 2) return 0;
+    let sum = 0;
+    for (let i = 1; i < events.length; i += 1) {
+      const prev = events[i - 1];
+      const curr = events[i];
+      if (
+        Number.isFinite(prev?.lat) &&
+        Number.isFinite(prev?.lon) &&
+        Number.isFinite(curr?.lat) &&
+        Number.isFinite(curr?.lon)
+      ) {
+        sum += haversineKm(prev.lat, prev.lon, curr.lat, curr.lon);
+      }
+    }
+    return Number.isFinite(sum) ? sum : 0;
+  }
+
+  async function formatEtaDateRangeText(startTimestamp, endTimestamp) {
+    if (!Number.isFinite(startTimestamp)) return '';
+    const safeEnd = Number.isFinite(endTimestamp) ? endTimestamp : startTimestamp;
+    const formatNative = (timestamp) => {
+      const date = new Date(timestamp);
+      return `${date.getMonth() + 1}월${date.getDate()}일`;
+    };
+    const dayjs = await loadDayjsFunction();
+    if (typeof dayjs !== 'function') {
+      return `${formatNative(startTimestamp)}-${formatNative(safeEnd)} 내`;
+    }
+    const from = dayjs(startTimestamp);
+    const to = dayjs(safeEnd);
+    if (!from.isValid() || !to.isValid()) {
+      return `${formatNative(startTimestamp)}-${formatNative(safeEnd)} 내`;
+    }
+    return `${from.format('M월D일')}-${to.format('M월D일')} 내`;
   }
 
   function resolveDestinationHub(events, lastEvent) {
@@ -967,7 +1075,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return null;
   }
 
-  function estimateDeliveryEta(events) {
+  async function estimateDeliveryEta(events, routeHint = null) {
     if (!Array.isArray(events) || events.length === 0) return null;
     if (events.some((evt) => isDeliveredEvent(evt))) {
       return { delivered: true };
@@ -997,11 +1105,63 @@ document.addEventListener('DOMContentLoaded', () => {
     const lastMileHours = determineLastMileHours(destination.iso, lastEvent.countryCode);
     const etaHours = remainingTravelHours + processingHours + lastMileHours;
     if (!Number.isFinite(etaHours)) return null;
-    const etaTimestamp = lastEvent.timestampMs + (etaHours * 3600 * 1000);
+    let etaTimestamp = lastEvent.timestampMs + (etaHours * 3600 * 1000);
+    let etaRangeDisplay = '';
+    let routeDistanceMinKm = 0;
+    let routeDistanceMaxKm = 0;
+    const observedDistanceBase = computeObservedDistanceKm(sorted);
+    let remainingRangeMinKm = remainingDistance;
+    let remainingRangeMaxKm = remainingDistance;
+    const totalProjectedBaseKm = observedDistanceBase + remainingDistance;
+    const baseProgressRatio = totalProjectedBaseKm > 0 ? clampNumber(observedDistanceBase / totalProjectedBaseKm, 0, 1) : 0;
+    let currentPositionText = `현재 예상 위치 약 ${Math.round(baseProgressRatio * 100)}% 지점`;
+    if (routeHint?.originCode && routeHint?.destinationCode && (state.kernel || state.nativeMode)) {
+      try {
+        const routeData = await runRouteSearch(
+          routeHint.originCode,
+          routeHint.destinationCode,
+          TOP_ROUTE_MAX_TRANSFERS,
+          TOP_ROUTE_CANDIDATE_LIMIT
+        );
+        const paths = Array.isArray(routeData?.paths) ? routeData.paths : [];
+        const topCandidates = paths
+          .filter((path) => Number.isFinite(path?.totalDistanceKm) && path.totalDistanceKm > 0)
+          .sort((a, b) => a.totalDistanceKm - b.totalDistanceKm)
+          .slice(0, TOP_ROUTE_TAKE);
+        if (topCandidates.length) {
+          const observedDistance = observedDistanceBase;
+          routeDistanceMinKm = topCandidates[0].totalDistanceKm;
+          routeDistanceMaxKm = topCandidates[topCandidates.length - 1].totalDistanceKm;
+          const etaHoursByCandidate = topCandidates.map((candidate) => {
+            const remainingKm = Math.max(candidate.totalDistanceKm - observedDistance, 0);
+            const travelHours = remainingKm > 5 ? (remainingKm / speed) : 0;
+            return travelHours + processingHours + lastMileHours;
+          });
+          const minHours = Math.min(...etaHoursByCandidate);
+          const maxHours = Math.max(...etaHoursByCandidate);
+          const minTimestamp = lastEvent.timestampMs + (minHours * 3600 * 1000);
+          const maxTimestamp = lastEvent.timestampMs + (maxHours * 3600 * 1000);
+          etaTimestamp = minTimestamp;
+          remainingRangeMinKm = Math.max(routeDistanceMinKm - observedDistance, 0);
+          remainingRangeMaxKm = Math.max(routeDistanceMaxKm - observedDistance, 0);
+          const projectedTotalKm = observedDistance + remainingRangeMaxKm;
+          const progressRatio = projectedTotalKm > 0 ? clampNumber(observedDistance / projectedTotalKm, 0, 1) : 0;
+          currentPositionText = `현재 예상 위치 약 ${Math.round(progressRatio * 100)}% 지점`;
+          etaRangeDisplay = await formatEtaDateRangeText(minTimestamp, maxTimestamp);
+        }
+      } catch (err) {
+        console.warn('Failed to build Top5 route ETA range:', err);
+      }
+    }
+    if (!etaRangeDisplay) {
+      etaRangeDisplay = await formatEtaDateRangeText(etaTimestamp, etaTimestamp);
+    }
     return {
       delivered: false,
       etaTimestamp,
       etaDisplay: formatTimelineTime(new Date(etaTimestamp)),
+      etaRangeDisplay,
+      observedKm: observedDistanceBase,
       remainingKm: remainingDistance,
       transportMode: futureMode,
       processingHours,
@@ -1011,7 +1171,12 @@ document.addEventListener('DOMContentLoaded', () => {
         remainingDistance,
         mode: futureMode,
         processingHours,
-        lastMileHours
+        lastMileHours,
+        routeDistanceMinKm,
+        routeDistanceMaxKm,
+        remainingRangeMinKm,
+        remainingRangeMaxKm,
+        currentPositionText
       })
     };
   }
@@ -1215,7 +1380,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!progresses.length) {
           throw new Error('진행 이벤트가 비어 있습니다.');
         }
-        return progresses;
+        return { progresses, trackingData: data };
       } catch (err) {
         attemptErrors.push(`${carrier.label}: ${err.message}`);
       }
@@ -1269,6 +1434,13 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>`
     ];
     if (result.eta && !result.eta.delivered && result.eta.etaDisplay) {
+      if (result.eta.etaRangeDisplay) {
+        parts.push(`
+      <div class="metric eta">
+        <span>예상 배송기간</span>
+        <strong>${result.eta.etaRangeDisplay}</strong>
+      </div>`);
+      }
       parts.push(`
       <div class="metric eta">
         <span>예상 배송완료</span>
@@ -1316,7 +1488,7 @@ document.addEventListener('DOMContentLoaded', () => {
       setTrackingStatus(trackingStatusIntl, '분석할 이벤트 문자열이 없습니다.', 'error');
       return;
     }
-    const etaInfo = estimateDeliveryEta(state.trackingEventsIntl);
+    const etaInfo = await estimateDeliveryEta(state.trackingEventsIntl, state.trackingRouteHintIntl);
     state.trackingEtaIntl = etaInfo || null;
     if (state.kernel && typeof state.kernel.analyzeTracking === 'function') {
       try {
@@ -1325,7 +1497,8 @@ document.addEventListener('DOMContentLoaded', () => {
           result.eta = etaInfo;
         }
         renderTrackingMetrics(trackingMetricsIntl, result);
-        const etaLabel = (etaInfo && !etaInfo.delivered && etaInfo.etaDisplay) ? ` · ETA ${etaInfo.etaDisplay}` : '';
+        const etaLabel = (etaInfo && !etaInfo.delivered)
+          ? ` · ETA ${etaInfo.etaRangeDisplay || etaInfo.etaDisplay || ''}` : '';
         setTrackingStatus(trackingStatusIntl, `분석 완료: EDI ${result.idiotScore?.toFixed ? result.idiotScore.toFixed(1) : '--'}${etaLabel}`, 'success');
       } catch (err) {
         setTrackingStatus(trackingStatusIntl, '분석 실패: ' + err.message, 'error');
@@ -1340,11 +1513,25 @@ document.addEventListener('DOMContentLoaded', () => {
           result.eta = etaInfo;
         }
         renderTrackingMetrics(trackingMetricsIntl, result);
-        const etaLabel = (etaInfo && !etaInfo.delivered && etaInfo.etaDisplay) ? ` · ETA ${etaInfo.etaDisplay}` : '';
+        const etaLabel = (etaInfo && !etaInfo.delivered)
+          ? ` · ETA ${etaInfo.etaRangeDisplay || etaInfo.etaDisplay || ''}` : '';
         setTrackingStatus(trackingStatusIntl, `분석 완료: EDI ${result.idiotScore?.toFixed ? result.idiotScore.toFixed(1) : '--'}${etaLabel}`, 'success');
       } catch (err) {
         setTrackingStatus(trackingStatusIntl, '분석 실패: ' + err.message, 'error');
       }
+      return;
+    }
+    if (etaInfo && !etaInfo.delivered) {
+      renderTrackingMetrics(trackingMetricsIntl, {
+        nodes: state.trackingEventsIntl.length,
+        directKm: etaInfo.remainingKm || 0,
+        traveledKm: etaInfo.observedKm ?? computeObservedDistanceKm(state.trackingEventsIntl),
+        routePenalty: 0,
+        dwellPenalty: 0,
+        idiotScore: 0,
+        eta: etaInfo
+      });
+      setTrackingStatus(trackingStatusIntl, `휴리스틱 ETA 추정 완료${etaInfo.etaRangeDisplay ? ` · ${etaInfo.etaRangeDisplay}` : ''}`, 'success');
       return;
     }
     setTrackingStatus(trackingStatusIntl, getWasmUnavailableMessage(), 'error');
@@ -1359,13 +1546,16 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     state.trackingEtaIntl = null;
+    state.trackingRouteHintIntl = null;
     const carriers = resolveKoreaPostCarriers(invoice);
     const carrierLabels = carriers.map(c => c.label).join(', ');
     setTrackingStatus(trackingStatusIntl, `한국 우체국 (${carrierLabels})에서 조회 중...`);
     try {
-      const rawEvents = await fetchTrackingEventsIntl(invoice, carriers);
+      const trackingPayload = await fetchTrackingEventsIntl(invoice, carriers);
+      const rawEvents = Array.isArray(trackingPayload?.progresses) ? trackingPayload.progresses : [];
       const events = enrichTrackingEvents(rawEvents);
       state.trackingEventsIntl = events;
+      state.trackingRouteHintIntl = resolveTrackingRouteHint(trackingPayload?.trackingData, events);
       if (!events.length) {
         setTrackingStatus(trackingStatusIntl, '파싱 가능한 공항 이벤트를 찾지 못했습니다. 로그를 직접 붙여넣어 주세요.', 'error');
         renderTrackingTimeline(trackingTimelineIntl, []);
@@ -1512,13 +1702,17 @@ async function init() {
   }
 
   // Initialize MapLibre maps
-  const mainMapContainerId = mapContainer ? 'map-container' : (document.getElementById('route-map') ? 'route-map' : null);
-  const modalMapContainerId = mapContainerLarge ? 'map-container-large' : (document.getElementById('route-map-large') ? 'route-map-large' : null);
-  if (mainMapContainerId) {
-    mainMapLibre = initMap(mainMapContainerId);
-  }
-  if (modalMapContainerId) {
-    modalMapLibre = initMap(modalMapContainerId, true);
+  if (typeof maplibregl !== 'undefined') {
+    const mainMapContainerId = mapContainer ? 'map-container' : (document.getElementById('route-map') ? 'route-map' : null);
+    const modalMapContainerId = mapContainerLarge ? 'map-container-large' : (document.getElementById('route-map-large') ? 'route-map-large' : null);
+    if (mainMapContainerId) {
+      mainMapLibre = initMap(mainMapContainerId);
+    }
+    if (modalMapContainerId) {
+      modalMapLibre = initMap(modalMapContainerId, true);
+    }
+  } else {
+    console.warn('MapLibre unavailable; map rendering is disabled in this environment.');
   }
 
   if (wasmReady) {
