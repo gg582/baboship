@@ -202,6 +202,10 @@ const HARD_CODED_NODE_FALLBACKS = {
   LHR: { code: 'LHR', lat: 51.4700, lon: -0.4543, layer: 'air' }
 };
 
+const MALFORMED_JSON_REPAIR_MODULE_URL = 'https://cdn.jsdelivr.net/npm/jsonrepair@3.11.0/+esm';
+let jsonRepairFunction = null;
+let jsonRepairLoadAttempted = false;
+
 const SEA_KEYWORDS = [/PORT/i, /TERMINAL/i, /WHARF/i, /부두/, /항\b/, /碼頭/];
 const LAND_KEYWORDS = [/허브/, /센터/, /물류/, /소포/, /delivery/i, /hub/i];
 const DELIVERED_PATTERNS = [/배달완료/, /배송완료/, /수취완료/, /delivered/i];
@@ -231,6 +235,31 @@ async function fetchJsonOrError(url, options = {}) {
     throw new Error(detail || `HTTP ${response.status}`);
   }
   return parsed ?? {};
+}
+
+async function parseJsonWithRecovery(raw, context = 'JSON') {
+  const normalized = typeof raw === 'string' ? raw.replace(/^\uFEFF/, '').trim() : '';
+  try {
+    return JSON.parse(normalized);
+  } catch (parseErr) {
+    if (!jsonRepairLoadAttempted) {
+      jsonRepairLoadAttempted = true;
+      try {
+        const mod = await import(MALFORMED_JSON_REPAIR_MODULE_URL);
+        jsonRepairFunction = typeof mod.jsonrepair === 'function' ? mod.jsonrepair : null;
+      } catch (loadErr) {
+        console.warn('Malformed JSON recovery library load failed:', loadErr);
+      }
+    }
+    if (typeof jsonRepairFunction === 'function') {
+      try {
+        return JSON.parse(jsonRepairFunction(normalized));
+      } catch (repairErr) {
+        console.warn(`${context} recovery failed:`, repairErr);
+      }
+    }
+    throw parseErr;
+  }
 }
 
 async function fetchNativeRoutes(from, to, maxTransfers, maxResults) {
@@ -655,7 +684,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // When WASM is ready, use the WASM kernel to get nodes data
       if (state.kernel && typeof state.kernel.getNodes === 'function') {
         try {
-          data = JSON.parse(state.kernel.getNodes());
+          data = await parseJsonWithRecovery(state.kernel.getNodes(), 'WASM nodes JSON');
         } catch (err) {
           console.warn('WASM nodes JSON parse failed, falling back to airports.json:', err);
           data = { nodes: await fetchJsonOrError('./airports.json') };
