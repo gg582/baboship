@@ -1200,8 +1200,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const cleaned = candidate.replace(/[^A-Za-z]/g, '').toUpperCase();
       if (/^[A-Z]{6}$/.test(cleaned)) {
-        const officeAlias = cleaned.slice(2, 5);
-        if (state.nodeMap.has(officeAlias)) return officeAlias;
+        const airportCode = cleaned.slice(2, 5);
+        if (state.nodeMap.has(airportCode)) return airportCode;
       }
       if (cleaned.length >= 6) return cleaned.slice(0, 6);
       if (cleaned.length === 3) return cleaned;
