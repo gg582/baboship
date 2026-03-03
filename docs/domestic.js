@@ -101,7 +101,18 @@ async function fetchORSPath(originCoords, destCoords) {
 function initMap(containerId) {
   const map = new maplibregl.Map({
     container: containerId,
-    style: 'https://tiles.stadiamaps.com/styles/stadium-dark.json',
+    style: {
+      version: 8,
+      sources: {
+        osm: {
+          type: 'raster',
+          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          attribution: '© OpenStreetMap contributors'
+        }
+      },
+      layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
+    },
     center: [127.5, 36.5], // Center on Korea
     zoom: 7
   });

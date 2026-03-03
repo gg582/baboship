@@ -497,7 +497,18 @@ document.addEventListener('DOMContentLoaded', () => {
   function initMap(containerId, isModal = false) {
     const map = new maplibregl.Map({
       container: containerId,
-      style: 'https://tiles.stadiamaps.com/styles/stadium-dark.json', // Example style, could use OpenFreeMap
+      style: {
+        version: 8,
+        sources: {
+          osm: {
+            type: 'raster',
+            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+            tileSize: 256,
+            attribution: '© OpenStreetMap contributors'
+          }
+        },
+        layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
+      },
       center: [0, 0], // starting position [lng, lat]
       zoom: 1 // starting zoom
     });
