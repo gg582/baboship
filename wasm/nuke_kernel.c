@@ -97,6 +97,15 @@ const nuke_flight_store_t* nuke_wasm_get_store(void) {
     return &g_store;
 }
 
+/* node_layers stores one byte per node: 0=air, 1=sea, 2=land */
+static const char* nuke_layer_byte_to_str(unsigned char b) {
+    switch (b) {
+        case 1: return "sea";
+        case 2: return "land";
+        default: return "air";
+    }
+}
+
 WASM_KEEPALIVE
 const char* nuke_wasm_get_nodes_json(void) {
     if (!g_initialized || g_store.node_count == 0) return "{\"nodes\":[]}";
@@ -123,7 +132,9 @@ const char* nuke_wasm_get_nodes_json(void) {
     offset += sprintf(buffer + offset, "{\"total\":%zu,\"nodes\":[", g_store.node_count);
     for (size_t i = 0; i < g_store.node_count; ++i) {
         const char *country = g_store.node_countries ? g_store.node_countries[i] : "";
-        const char *layer = g_store.node_layers ? g_store.node_layers + (i * NUKE_LAYER_MAX_LEN) : "";
+        const char *layer = g_store.node_layers
+            ? nuke_layer_byte_to_str((unsigned char)g_store.node_layers[i])
+            : "air";
         offset += sprintf(buffer + offset, 
             "%s{\"id\":%d,\"code\":\"%s\",\"lat\":%.4f,\"lon\":%.4f,\"country\":\"%s\",\"layer\":\"%s\"}",
             (i == 0 ? "" : ","),
@@ -323,7 +334,9 @@ const char* nuke_wasm_get_direct_destinations_json(const char *code) {
         
         double dist = g_store.adj_distance[off + i];
         const char *country = g_store.node_countries ? g_store.node_countries[dst_idx] : ""; // Renamed from airport_countries
-        const char *layer = g_store.node_layers ? g_store.node_layers + (dst_idx * NUKE_LAYER_MAX_LEN) : ""; // Added layer
+        const char *layer = g_store.node_layers
+            ? nuke_layer_byte_to_str((unsigned char)g_store.node_layers[dst_idx])
+            : "air"; // Added layer
         size_t rem = buffer_size - offset;
         offset += snprintf(buffer + offset, rem,
             "%s{\"code\":\"%s\",\"lat\":%.4f,\"lon\":%.4f,\"distKm\":%.1f,\"connections\":%zu,\"country\":\"%s\",\"layer\":\"%s\"}", // Added layer
@@ -391,7 +404,9 @@ const char* nuke_wasm_get_best_nodes_json(void) {
     for (size_t i = 0; i < top; ++i) {
         hub_t *h = &hubs[i];
         const char *country = g_store.node_countries ? g_store.node_countries[h->idx] : ""; // Renamed from airport_countries
-        const char *layer = g_store.node_layers ? g_store.node_layers + (h->idx * NUKE_LAYER_MAX_LEN) : ""; // Added layer
+        const char *layer = g_store.node_layers
+            ? nuke_layer_byte_to_str((unsigned char)g_store.node_layers[h->idx])
+            : "air"; // Added layer
         remaining = buffer_size - offset;
         offset += snprintf(buffer + offset, remaining,
             "%s{\"anchorNode\":\"%s\",\"lat\":%.4f,\"lon\":%.4f," // Renamed from anchorAirport to anchorNode

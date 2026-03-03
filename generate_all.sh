@@ -58,14 +58,27 @@ run_py scripts/ingest_openflights.py \
   --routes data/raw/routes.dat \
   --output data/nuke_routes.db
 
-log "Downloading Shipping Lanes GeoJSON"
-mkdir -p data/raw # Ensure raw data directory exists
-curl -s -o data/raw/Shipping_Lanes_v1.geojson https://raw.githubusercontent.com/newzealandpaul/Shipping-Lanes/main/data/Shipping_Lanes_v1.geojson
+# Maritime (海運) data ingestion is disabled by default because it is an
+# experimental beta feature.  Pass --with-maritime to opt in.
+WITH_MARITIME=0
+for arg in "$@"; do
+  if [[ "$arg" == "--with-maritime" ]]; then
+    WITH_MARITIME=1
+  fi
+done
 
-log "Ingesting Maritime data into data/nuke_routes.db"
-run_py scripts/ingest_maritime.py \
-  --geojson data/raw/Shipping_Lanes_v1.geojson \
-  --output data/nuke_routes.db
+if [[ "$WITH_MARITIME" == "1" ]]; then
+  log "Downloading Shipping Lanes GeoJSON (beta)"
+  mkdir -p data/raw
+  curl -s -o data/raw/Shipping_Lanes_v1.geojson https://raw.githubusercontent.com/newzealandpaul/Shipping-Lanes/main/data/Shipping_Lanes_v1.geojson
+
+  log "Ingesting Maritime data into data/nuke_routes.db (beta)"
+  run_py scripts/ingest_maritime.py \
+    --geojson data/raw/Shipping_Lanes_v1.geojson \
+    --output data/nuke_routes.db
+else
+  log "[skip] Maritime data ingestion skipped (pass --with-maritime to enable beta)"
+fi
 
 log "Exporting airports for static dashboard"
 run_py scripts/export_airports_json.py data/nuke_routes.db docs/airports.json
