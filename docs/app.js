@@ -205,6 +205,7 @@ const HARD_CODED_NODE_FALLBACKS = {
 const MALFORMED_JSON_REPAIR_MODULE_URL = 'https://cdn.jsdelivr.net/npm/jsonrepair@3.11.0/+esm';
 let jsonRepairFunction = null;
 let jsonRepairLoadAttempted = false;
+let jsonRepairImportPromise = null;
 
 const SEA_KEYWORDS = [/PORT/i, /TERMINAL/i, /WHARF/i, /부두/, /항\b/, /碼頭/];
 const LAND_KEYWORDS = [/허브/, /센터/, /물류/, /소포/, /delivery/i, /hub/i];
@@ -245,8 +246,11 @@ async function parseJsonWithRecovery(raw, context = 'JSON') {
     if (!jsonRepairLoadAttempted) {
       jsonRepairLoadAttempted = true;
       try {
-        const mod = await import(MALFORMED_JSON_REPAIR_MODULE_URL);
-        jsonRepairFunction = typeof mod.jsonrepair === 'function' ? mod.jsonrepair : null;
+        jsonRepairImportPromise = jsonRepairImportPromise || import(MALFORMED_JSON_REPAIR_MODULE_URL);
+        const mod = await jsonRepairImportPromise;
+        jsonRepairFunction = typeof mod.jsonrepair === 'function'
+          ? mod.jsonrepair
+          : (typeof mod.jsonRepair === 'function' ? mod.jsonRepair : null);
       } catch (loadErr) {
         console.warn('Malformed JSON recovery library load failed:', loadErr);
       }
