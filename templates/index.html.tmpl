@@ -25,6 +25,7 @@
             <div class="mode-tabs" role="tablist" aria-label="화물 분석 모드">
                 <button type="button" class="mode-tab active" data-mode-tab="tracking" role="tab" aria-controls="tracking-panel" aria-selected="true">EMS 경로 효율</button>
                 <button type="button" class="mode-tab" data-mode-tab="manual" role="tab" aria-controls="manual-panel" aria-selected="false">수동으로 공항 선택</button>
+                <button type="button" class="mode-tab mode-tab-beta" data-mode-tab="maritime" role="tab" aria-controls="maritime-panel" aria-selected="false" title="해운 경로는 실험적 기능입니다. 데이터 정확도가 항공 데이터보다 낮을 수 있습니다.">해운 경로 <span class="beta-badge">베타</span></button>
             </div>
         </header>
 
@@ -178,6 +179,25 @@
             <div id="best-to-results"><div class="empty-state">아직 최적 경로를 검색하지 않았습니다. 버튼을 눌러서 검색하세요.</div></div>
         </section>
         </main>
+
+        <section class="panel hidden maritime-panel" id="maritime-panel" data-panel="maritime">
+            <div class="card maritime-card">
+                <div class="tracking-header">
+                    <div>
+                        <h2>해운 경로 탐색 <span class="beta-badge">베타</span></h2>
+                        <p>해운 경로 기능은 현재 <strong>실험적 베타</strong> 단계입니다. 해운 레인 데이터를 기반으로 해상 운송 경로를 분석하지만, 항공 데이터에 비해 정확도가 낮을 수 있습니다.</p>
+                        <ul class="beta-notes">
+                            <li>해운 데이터는 글로벌 주요 항로만 포함하며 정기선 시간표는 반영되지 않습니다.</li>
+                            <li>항구 코드(IATA 형식 아님)가 표시될 수 있으며, 정확한 항구명 매핑이 제한적입니다.</li>
+                            <li>이 기능을 사용하려면 <code>generate_all.sh --with-maritime</code>으로 해운 데이터를 포함해 데이터베이스를 재생성해야 합니다.</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="beta-placeholder">
+                    <div class="empty-state">🚢 해운 경로 기능이 곧 추가될 예정입니다.<br>현재 데이터베이스에는 항공 노선만 포함되어 있습니다.<br><code>generate_all.sh --with-maritime</code>을 실행해 해운 데이터를 활성화하세요.</div>
+                </div>
+            </div>
+        </section>
     </div>
     <div id="map-modal" class="map-modal" aria-hidden="true">
         <div class="map-modal-content">

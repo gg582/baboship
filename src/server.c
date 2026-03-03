@@ -623,7 +623,9 @@ static void nodes_handler(cwist_http_request *req, cwist_http_response *res) { /
             cJSON_AddStringToObject(node, "country", g_state.store.node_countries[i]); // Renamed airport_countries to node_countries
         }
         if (g_state.store.node_layers) { // Added layer
-            cJSON_AddStringToObject(node, "layer", g_state.store.node_layers + (i * NUKE_LAYER_MAX_LEN));
+            unsigned char lb = (unsigned char)g_state.store.node_layers[i];
+            const char *ls = (lb == 1) ? "sea" : (lb == 2) ? "land" : "air";
+            cJSON_AddStringToObject(node, "layer", ls);
         }
         cJSON_AddItemToArray(arr, node);
         emitted++;
@@ -815,7 +817,9 @@ static void direct_handler(cwist_http_request *req, cwist_http_response *res) {
             cJSON_AddStringToObject(node, "country", g_state.store.node_countries[dst_idx]); // Renamed airport_countries to node_countries
         }
         if (g_state.store.node_layers) { // Added layer
-            cJSON_AddStringToObject(node, "layer", g_state.store.node_layers + (dst_idx * NUKE_LAYER_MAX_LEN));
+            unsigned char lb = (unsigned char)g_state.store.node_layers[dst_idx];
+            const char *ls = (lb == 1) ? "sea" : (lb == 2) ? "land" : "air";
+            cJSON_AddStringToObject(node, "layer", ls);
         }
         cJSON_AddItemToArray(arr, node);
     }

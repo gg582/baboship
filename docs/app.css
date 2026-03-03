@@ -744,3 +744,46 @@ button.ghost:hover {
         padding: 1.5rem;
     }
 }
+
+/* Beta badge for experimental features */
+.beta-badge {
+    display: inline-block;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    background: #f59e0b;
+    color: #1a1a1a;
+    padding: 0.1em 0.45em;
+    border-radius: 4px;
+    vertical-align: middle;
+    margin-left: 0.3em;
+    line-height: 1.4;
+}
+
+.mode-tab-beta {
+    border-color: #f59e0b44;
+}
+.mode-tab-beta.active {
+    border-color: #f59e0b;
+}
+
+/* Maritime (beta) panel */
+.maritime-panel {
+    width: 100%;
+}
+
+.maritime-card {
+    max-width: 860px;
+}
+
+.beta-notes {
+    margin: 0.75rem 0 0 1.25rem;
+    color: var(--muted);
+    font-size: 0.875rem;
+    line-height: 1.6;
+}
+
+.beta-placeholder {
+    margin-top: 1.5rem;
+}

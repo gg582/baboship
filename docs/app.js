@@ -308,25 +308,43 @@ async function initWasm() {
   try {
     const { default: createNukeKernel } = await import(assetPaths.wasmModule);
     console.log('Creating WASM Kernel...');
-    state.kernel = await createNukeKernel({
+    const kernelArgs = {
       locateFile: (path) => resolveAsset(`wasm/${path}`)
-    });
+    };
+    // The pre-built binary may have been compiled with pthreads support, which
+    // requires SharedArrayBuffer (needs COOP/COEP headers not set on GitHub Pages).
+    // Since the C worker pool is disabled, we can safely use non-shared memory
+    // to make the module work in all environments.
+    if (typeof SharedArrayBuffer === 'undefined') {
+      kernelArgs.wasmMemory = new WebAssembly.Memory({ initial: 512, maximum: 32768 });
+    }
+    state.kernel = await createNukeKernel(kernelArgs);
     
     if (!state.kernel.cwrap) {
       console.error('WASM Kernel loaded but cwrap is missing. Check EXPORTED_RUNTIME_METHODS.');
       throw new Error('cwrap missing');
     }
 
-    // Bind WASM functions via cwrap (wraps C-exported symbols)
+    // Bind WASM functions via cwrap (wraps C-exported symbols).
+    // Support both new (get_nodes_json) and old (get_airports_json) binary names.
     state.kernel.initStore = state.kernel.cwrap('nuke_wasm_init', 'number', []);
     state.kernel.loadData = state.kernel.cwrap('nuke_wasm_load_data', 'number', ['number', 'number']);
-    state.kernel.getNodes = state.kernel.cwrap('nuke_wasm_get_nodes_json', 'string', []); // Changed from getAirports
+    if (state.kernel['_nuke_wasm_get_nodes_json']) {
+      state.kernel.getNodes = state.kernel.cwrap('nuke_wasm_get_nodes_json', 'string', []);
+    } else {
+      // Fallback for older binary compiled before rename
+      state.kernel.getNodes = state.kernel.cwrap('nuke_wasm_get_airports_json', 'string', []);
+    }
     state.kernel.getBest = state.kernel.cwrap('nuke_wasm_get_best_nodes_json', 'string', []);
     state.kernel.getHealth = state.kernel.cwrap('nuke_wasm_get_health_json', 'string', []);
     state.kernel.searchRoutes = state.kernel.cwrap('nuke_wasm_search_routes_json', 'string', ['string', 'string', 'number']);
     state.kernel.calcScore = state.kernel.cwrap('nuke_wasm_calc_score', 'number', ['number', 'number', 'number', 'number', 'number']);
-    state.kernel.getDirectDests = state.kernel.cwrap('nuke_wasm_get_direct_destinations_json', 'string', ['string']);
-    state.kernel.analyzeTracking = state.kernel.cwrap('analyze_tracking', 'string', ['string']);
+    if (state.kernel['_nuke_wasm_get_direct_destinations_json']) {
+      state.kernel.getDirectDests = state.kernel.cwrap('nuke_wasm_get_direct_destinations_json', 'string', ['string']);
+    }
+    if (state.kernel['_analyze_tracking']) {
+      state.kernel.analyzeTracking = state.kernel.cwrap('analyze_tracking', 'string', ['string']);
+    }
 
     if (typeof state.kernel.initStore !== 'function') {
       if (typeof state.kernel._nuke_wasm_init === 'function') {
@@ -334,9 +352,6 @@ async function initWasm() {
       } else {
         throw new Error('initStore is not a function - symbol might be missing in WASM exports');
       }
-    }
-    if (typeof state.kernel.analyzeTracking !== 'function' && typeof state.kernel._analyze_tracking === 'function') {
-      state.kernel.analyzeTracking = state.kernel._analyze_tracking;
     }
 
     state.kernel.initStore();
@@ -476,6 +491,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const trackingMetricsDomestic = document.getElementById('tracking-metrics-domestic');
   const trackingStatusDomestic = document.getElementById('tracking-status-domestic');
   const trackingFetchBtnDomestic = document.getElementById('tracking-fetch-btn-domestic');
+  const maritimePanel = document.getElementById('maritime-panel');
 
   // --- MapLibre GL JS Integration ---
   function initMap(containerId, isModal = false) {
@@ -635,7 +651,8 @@ document.addEventListener('DOMContentLoaded', () => {
         throw new Error(getWasmUnavailableMessage('노드 엔진이 준비되지 않았습니다.'));
       }
 
-      const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+      const nodes = Array.isArray(data.nodes) ? data.nodes
+                   : Array.isArray(data.airports) ? data.airports : [];
       state.nodes = nodes;
       state.nodeMap = new Map(state.nodes.map(n => [n.code, n]));
       statAirports.textContent = state.nodes.length.toLocaleString(); // Still using statAirports for total nodes
@@ -661,6 +678,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     if (manualPanel) manualPanel.classList.toggle('hidden', mode !== 'manual');
     if (trackingPanel) trackingPanel.classList.toggle('hidden', mode !== 'tracking');
+    if (maritimePanel) maritimePanel.classList.toggle('hidden', mode !== 'maritime');
     
     // Trigger map resize when panel becomes visible
     if (mainMapLibre) mainMapLibre.resize();

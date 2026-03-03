@@ -444,8 +444,10 @@ static void append_result_locked(nuke_worker_group_t *group,
             size_t degree = group->store->route_counts[src_node_idx];
             for (size_t route_i = 0; route_i < degree; ++route_i) {
                 if (group->store->adj_dst_indices[offset + route_i] == dst_node_idx) {
-                    // Assuming NUKE_LAYER_MAX_LEN is available
-                    memcpy(slot->layer, group->store->adj_route_layers + (offset + route_i) * NUKE_LAYER_MAX_LEN, NUKE_LAYER_MAX_LEN);
+                    /* adj_route_layers stores one byte per route: 0=air, 1=sea, 2=land */
+                    unsigned char lb = (unsigned char)group->store->adj_route_layers[offset + route_i];
+                    const char *ls = (lb == 1) ? "sea" : (lb == 2) ? "land" : "air";
+                    strncpy(slot->layer, ls, NUKE_LAYER_MAX_LEN - 1);
                     slot->layer[NUKE_LAYER_MAX_LEN - 1] = '\0'; // Ensure null-termination
                     break;
                 }
