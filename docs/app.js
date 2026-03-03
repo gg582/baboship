@@ -1457,8 +1457,14 @@ async function init() {
   }
 
   // Initialize MapLibre maps
-  mainMapLibre = initMap('map-container');
-  modalMapLibre = initMap('map-container-large', true);
+  const mainMapContainerId = mapContainer ? 'map-container' : (document.getElementById('route-map') ? 'route-map' : null);
+  const modalMapContainerId = mapContainerLarge ? 'map-container-large' : (document.getElementById('route-map-large') ? 'route-map-large' : null);
+  if (mainMapContainerId) {
+    mainMapLibre = initMap(mainMapContainerId);
+  }
+  if (modalMapContainerId) {
+    modalMapLibre = initMap(modalMapContainerId, true);
+  }
 
   if (wasmReady) {
     try {
