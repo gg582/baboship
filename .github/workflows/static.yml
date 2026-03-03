@@ -38,7 +38,29 @@ jobs:
           version: 3.1.64
 
       - name: Generate all artifacts
-        run: ./generate_all.sh
+        run: ./generate_all.sh --with-maritime
+
+      - name: Verify airports.json
+        run: |
+          python3 - <<'EOF'
+          import json, sys, time
+
+          path = "docs/airports.json"
+          t0 = time.perf_counter()
+          with open(path, "r", encoding="utf-8") as f:
+              data = json.load(f)
+          elapsed = time.perf_counter() - t0
+
+          count = len(data)
+          print(f"airports.json loaded {count} entries in {elapsed*1000:.1f} ms")
+          if count < 1000:
+              print(f"FAIL: expected at least 1000 airports, got {count}", file=sys.stderr)
+              sys.exit(1)
+          if elapsed > 5.0:
+              print(f"FAIL: airports.json took {elapsed:.2f}s to load (threshold: 5s)", file=sys.stderr)
+              sys.exit(1)
+          print("PASS")
+          EOF
 
       - name: Build WASM
         run: make wasm
