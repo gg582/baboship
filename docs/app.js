@@ -1395,7 +1395,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function buildTrackingPayload(events) {
     if (!events.length) return '';
-    return events.map(evt => `${evt.alias} ${evt.timestampToken} ${evt.statusText || ''}`.trim()).join('\n');
+    return events.map((evt) => {
+      const flowTimestamp = Number.isFinite(evt.timestampMs)
+        ? Math.floor(evt.timestampMs / 1000)
+        : evt.timestampToken;
+      return `${evt.alias} ${flowTimestamp || ''} ${evt.statusText || ''}`.trim();
+    }).join('\n');
   }
 
   function renderTrackingMetrics(metricsElement, result) {
