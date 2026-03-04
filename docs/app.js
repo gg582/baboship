@@ -1396,7 +1396,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function buildTrackingPayload(events) {
     if (!events.length) return '';
     return events.map((evt) => {
-      const flowTimestamp = Number.isFinite(evt?.timestampMs)
+      const flowTimestamp = Number.isFinite(evt.timestampMs)
         ? Math.floor(evt.timestampMs / 1000)
         : evt.timestampToken;
       return `${evt.alias} ${flowTimestamp || ''} ${evt.statusText || ''}`.trim();
