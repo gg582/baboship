@@ -1643,23 +1643,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const domesticPattern = /^\d{13}$/;
     if (intlPattern.test(normalized)) {
       const serviceInfo = classifyUPUS10ServiceClass(normalized);
-      if (serviceInfo?.serviceClass === 'ems') {
-        pushUnique('kr.epost.ems', 'Korea Post EMS');
-        pushUnique('kr.epost', 'Korea Post');
-        pushUnique('un.upu.ems', 'UPU EMS (fallback)');
-      } else if (serviceInfo?.serviceClass === 'letter_tracked') {
-        // LA–LZ = UPU tracked letter (not EMS); use the generic Korea Post endpoint first
-        pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
-        pushUnique('un.upu.ems', 'UPU EMS (fallback)');
-      } else if (serviceInfo?.serviceClass === 'registered') {
+      // 국제우편은 우체국 EMS 엔드포인트를 우선으로 통일해 404 가능성을 낮춘다.
+      pushUnique('kr.epost.ems', 'Korea Post EMS');
+      if (serviceInfo?.serviceClass === 'letter_tracked') {
+        // Letter 계열은 일반 우체국 API를 보조 후보로 둔다.
         pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
       } else if (serviceInfo?.serviceClass === 'parcel') {
+        // 소포 계열은(EMS 우선 전제) 일반 우체국 API를 보조 후보로 둔다.
         pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
-        pushUnique('kr.epost.ems', 'Korea Post EMS');
+      } else if (serviceInfo?.serviceClass === 'registered') {
+        pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
       } else {
-        // Unknown service indicator – try generic first, EMS as fallback
         pushUnique('kr.epost', 'Korea Post');
-        pushUnique('kr.epost.ems', 'Korea Post EMS');
+        pushUnique('un.upu.ems', 'UPU EMS (fallback)');
       }
     } else if (domesticPattern.test(normalized) || normalized.startsWith('KR')) {
       pushUnique('kr.epost', 'Korea Post');
