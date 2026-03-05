@@ -215,6 +215,9 @@ const TOP_ROUTE_MAX_TRANSFERS = 5;
 const TOP_ROUTE_CANDIDATE_LIMIT = 24;
 const TOP_ROUTE_TAKE = 5;
 const PENDING_DESTINATION_CUSTOMS_HOURS = 96;
+// Extra upper-bound buffer applied to the ETA range when no departure scan has
+// been observed yet.  120 h = 5 days covers typical outbound-queue variance.
+const PRE_DEPARTURE_DELAY_MAX_HOURS = 120;
 
 // ---------------------------------------------------------------------------
 // Public holidays by ISO country code (2025–2026).
@@ -487,12 +490,45 @@ function addBusinessHoursCalendar(startMs, hours, iso, includeSaturday = false) 
 const SEA_KEYWORDS = [/PORT/i, /TERMINAL/i, /WHARF/i, /부두/, /항\b/, /碼頭/];
 const LAND_KEYWORDS = [/허브/, /센터/, /물류/, /소포/, /delivery/i, /hub/i];
 const DELIVERED_PATTERNS = [/배달완료/, /배송완료/, /수취완료/, /delivered/i];
+
+// UPU S10 service indicator ranges (first two letters of tracking number).
+// Reference: UPU S10 standard, Table B1.
+const UPU_S10_SERVICE_CLASSES = [
+  // AA–AZ: reserved / air-mail letter post (included for completeness)
+  { range: ['AA', 'AZ'], serviceClass: 'air',            label: '항공 우편' },
+  { range: ['CA', 'CZ'], serviceClass: 'parcel',         label: '등기 소포' },
+  { range: ['EA', 'EZ'], serviceClass: 'ems',            label: 'EMS' },
+  { range: ['LA', 'LZ'], serviceClass: 'letter_tracked', label: '추적 서신' },
+  { range: ['RA', 'RZ'], serviceClass: 'registered',     label: '등기 우편' },
+  { range: ['VA', 'VZ'], serviceClass: 'parcel',         label: '우편 소포' }
+];
+
+// Single combined regex for departure/in-transit milestones (fast O(n) scan).
+const DEPARTURE_RE = /출국|출발|항공기.*적재|적재.*항공기|in.?transit|departed|dispatch|발송완료|발송됨|통관.*통과|아웃바운드|항공.*탑재|탑재.*완료/i;
 function clampNumber(value, min, max) {
   const num = Number(value);
   if (Number.isNaN(num)) return min;
   if (typeof min === 'number' && num < min) return min;
   if (typeof max === 'number' && num > max) return max;
   return num;
+}
+
+/**
+ * Classify a UPU S10 tracking number by its two-letter service indicator.
+ * Returns the matching entry from UPU_S10_SERVICE_CLASSES, or null if the
+ * number does not match the UPU S10 format.
+ */
+function classifyUPUS10ServiceClass(invoice) {
+  const normalized = (invoice || '').trim().toUpperCase();
+  // UPU S10: 2-letter service indicator + 8-digit serial + 1 check digit + 2-letter country code
+  const m = normalized.match(/^([A-Z]{2})\d{8}\d[A-Z]{2}$/);
+  if (!m) return null;
+  const prefix = m[1];
+  for (const entry of UPU_S10_SERVICE_CLASSES) {
+    const [lo, hi] = entry.range;
+    if (prefix >= lo && prefix <= hi) return entry;
+  }
+  return null;
 }
 
 async function fetchJsonOrError(url, options = {}) {
@@ -1160,6 +1196,16 @@ document.addEventListener('DOMContentLoaded', () => {
     return code === 'delivered' || code === 'complete';
   }
 
+  /**
+   * Returns true when none of the enriched events contains a departure/in-transit
+   * milestone scan.  In this state the shipment has not yet left the origin country,
+   * so any ETA estimate carries large uncertainty and should be labelled accordingly.
+   */
+  function isPreDepartureState(events) {
+    if (!Array.isArray(events) || !events.length) return true;
+    return !events.some(evt => DEPARTURE_RE.test(evt.statusText || ''));
+  }
+
   function hasSeaHint(evt) {
     if (!evt) return false;
     const text = `${evt.alias || ''} ${evt.locationName || ''} ${evt.statusText || ''}`.toUpperCase();
@@ -1234,7 +1280,8 @@ document.addEventListener('DOMContentLoaded', () => {
     return 72;
   }
 
-  function computeEtaConfidence(eventCount, remainingDistance) {
+  function computeEtaConfidence(eventCount, remainingDistance, preDeparture = false) {
+    if (preDeparture) return '낮음';
     if (eventCount >= 5 && remainingDistance < 500) return '높음';
     if (eventCount >= 3 && remainingDistance < 3500) return '중간';
     return '낮음';
@@ -1388,6 +1435,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const sorted = enrichable.slice().sort((a, b) => a.timestampMs - b.timestampMs);
     const lastEvent = sorted[sorted.length - 1];
 
+    // Detect whether the shipment has not yet departed the origin country.
+    // When pre-departure, only origin-exchange-office scans exist; any ETA carries
+    // high uncertainty and must be accompanied by a wider range.
+    const preDeparture = isPreDepartureState(events);
+
     // Resolve destination, honouring the user-selected ISO code
     const effectiveUserIso = (userDestIso || state.trackingUserDestIso || '').toUpperCase() || null;
     const destination = resolveDestinationHub(events, lastEvent, effectiveUserIso);
@@ -1469,17 +1521,27 @@ document.addEventListener('DOMContentLoaded', () => {
           const projectedTotalKm = observedDistance + remainingRangeMaxKm;
           const progressRatio = projectedTotalKm > 0 ? clampNumber(observedDistance / projectedTotalKm, 0, 1) : 0;
           currentPositionText = `현재 예상 위치 약 ${Math.round(progressRatio * 100)}% 지점`;
-          etaRangeDisplay = await formatEtaDateRangeText(minTimestamp, maxTimestamp);
+          // Pre-departure: widen the upper bound by up to 5 days to reflect
+          // the unobserved departure queuing / outbound-flight lead time.
+          const maxTimestampWidened = preDeparture
+            ? maxTimestamp + PRE_DEPARTURE_DELAY_MAX_HOURS * 3600000
+            : maxTimestamp;
+          etaRangeDisplay = await formatEtaDateRangeText(minTimestamp, maxTimestampWidened);
         }
       } catch (err) {
         console.warn('Failed to build Top5 route ETA range:', err);
       }
     }
     if (!etaRangeDisplay) {
-      etaRangeDisplay = await formatEtaDateRangeText(etaTimestamp, etaTimestamp);
+      // Without route data: in pre-departure state show a range with a 5-day upper buffer.
+      const etaMax = preDeparture
+        ? etaTimestamp + PRE_DEPARTURE_DELAY_MAX_HOURS * 3600000
+        : etaTimestamp;
+      etaRangeDisplay = await formatEtaDateRangeText(etaTimestamp, etaMax);
     }
     return {
       delivered: false,
+      preDeparture,
       etaTimestamp,
       etaDisplay: formatTimelineTime(new Date(etaTimestamp)),
       etaRangeDisplay,
@@ -1490,7 +1552,7 @@ document.addEventListener('DOMContentLoaded', () => {
       destinationCustomsHours,
       lastMileHours,
       destIso,
-      confidence: computeEtaConfidence(sorted.length, remainingDistance),
+      confidence: computeEtaConfidence(sorted.length, remainingDistance, preDeparture),
       reason: buildEtaReason({
         remainingDistance,
         mode: futureMode,
@@ -1580,9 +1642,25 @@ document.addEventListener('DOMContentLoaded', () => {
     const intlPattern = /^[A-Z]{2}\d{9}[A-Z]{2}$/;
     const domesticPattern = /^\d{13}$/;
     if (intlPattern.test(normalized)) {
-      pushUnique('kr.epost.ems', 'Korea Post EMS');
-      pushUnique('kr.epost', 'Korea Post');
-      pushUnique('un.upu.ems', 'UPU EMS (fallback)');
+      const serviceInfo = classifyUPUS10ServiceClass(normalized);
+      if (serviceInfo?.serviceClass === 'ems') {
+        pushUnique('kr.epost.ems', 'Korea Post EMS');
+        pushUnique('kr.epost', 'Korea Post');
+        pushUnique('un.upu.ems', 'UPU EMS (fallback)');
+      } else if (serviceInfo?.serviceClass === 'letter_tracked') {
+        // LA–LZ = UPU tracked letter (not EMS); use the generic Korea Post endpoint first
+        pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
+        pushUnique('un.upu', 'UPU (fallback)');
+      } else if (serviceInfo?.serviceClass === 'registered') {
+        pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
+      } else if (serviceInfo?.serviceClass === 'parcel') {
+        pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
+        pushUnique('kr.epost.ems', 'Korea Post EMS');
+      } else {
+        // Unknown service indicator – try generic first, EMS as fallback
+        pushUnique('kr.epost', 'Korea Post');
+        pushUnique('kr.epost.ems', 'Korea Post EMS');
+      }
     } else if (domesticPattern.test(normalized) || normalized.startsWith('KR')) {
       pushUnique('kr.epost', 'Korea Post');
       pushUnique('kr.epost.ems', 'Korea Post EMS');
@@ -1784,6 +1862,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <span>예상 배송완료</span>
         <strong>${result.eta.etaDisplay}</strong>
         ${result.eta.reason ? `<small>${result.eta.reason}</small>` : ''}
+        ${result.eta.preDeparture ? `<small class="warn">⚠️ 출국 전 단계 – 출국 스캔 미관측, 구간 예측 적용</small>` : ''}
         ${calNote}
       </div>`);
       parts.push(`
@@ -1888,8 +1967,10 @@ document.addEventListener('DOMContentLoaded', () => {
     state.trackingEtaIntl = null;
     state.trackingRouteHintIntl = null;
     const carriers = resolveKoreaPostCarriers(invoice);
+    const serviceInfo = classifyUPUS10ServiceClass(invoice);
+    const serviceLabel = serviceInfo ? ` (${serviceInfo.label})` : '';
     const carrierLabels = carriers.map(c => c.label).join(', ');
-    setTrackingStatus(trackingStatusIntl, `한국 우체국 (${carrierLabels})에서 조회 중...`);
+    setTrackingStatus(trackingStatusIntl, `${carrierLabels}${serviceLabel}에서 조회 중...`);
     try {
       const trackingPayload = await fetchTrackingEventsIntl(invoice, carriers);
       const rawEvents = Array.isArray(trackingPayload?.progresses) ? trackingPayload.progresses : [];
