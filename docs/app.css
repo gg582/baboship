@@ -232,6 +232,11 @@ body {
     font-size: 0.72rem;
 }
 
+.tracking-metrics .metric small.warn {
+    color: #d97706;
+    font-size: 0.72rem;
+}
+
 .tracking-timeline {
     border: 1px solid var(--card-border);
     border-left: 3px solid var(--accent);
