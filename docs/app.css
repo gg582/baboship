@@ -134,6 +134,23 @@ body {
     min-width: 220px;
 }
 
+.tracking-actions label select {
+    width: 100%;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--card-border);
+    font-size: 0.95rem;
+    font-family: 'IBM Plex Sans KR', system-ui, sans-serif;
+    background: #fff;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.tracking-actions label select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(232, 102, 27, 0.15);
+}
+
 .tracking-body {
     display: flex;
     flex-direction: column;
@@ -208,6 +225,11 @@ body {
 .tracking-metrics .metric small {
     font-size: 0.75rem;
     color: var(--muted);
+}
+
+.tracking-metrics .metric small.cal-note {
+    color: #059669;
+    font-size: 0.72rem;
 }
 
 .tracking-timeline {
