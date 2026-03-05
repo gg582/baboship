@@ -150,7 +150,7 @@ const ORS_API_KEY = trackerConfig.orsApiKey || ''; // Placeholder for ORS API Ke
 const ORS_BASE_URL = 'https://api.openrouteservice.org/v2/directions/driving-car'; // ORS Directions API
 
 const TRANSPORT_SPEED_KMH = {
-  air: 780,
+  air: 550,
   sea: 36,
   land: 65
 };
@@ -213,6 +213,7 @@ let dayjsImportPromise = null;
 const TOP_ROUTE_MAX_TRANSFERS = 5;
 const TOP_ROUTE_CANDIDATE_LIMIT = 24;
 const TOP_ROUTE_TAKE = 5;
+const PENDING_DESTINATION_CUSTOMS_HOURS = 96;
 
 const SEA_KEYWORDS = [/PORT/i, /TERMINAL/i, /WHARF/i, /부두/, /항\b/, /碼頭/];
 const LAND_KEYWORDS = [/허브/, /센터/, /물류/, /소포/, /delivery/i, /hub/i];
@@ -917,13 +918,16 @@ document.addEventListener('DOMContentLoaded', () => {
     let hours = 0;
     if (/교환국/.test(text)) {
       if (/도착|접수/.test(text) && !/완료|통과/.test(text)) {
-        hours += 18;
+        hours += 72;
       } else {
-        hours += 8;
+        hours += 48;
       }
     }
+    if (/발송준비/.test(text)) {
+      hours += 48;
+    }
     if (/통관/.test(text)) {
-      hours += /완료/.test(text) ? 4 : 14;
+      hours += /완료/.test(text) ? 12 : 48;
     }
     if (/배달준비|배송준비|집배준비/.test(text)) {
       hours += 6;
@@ -934,16 +938,30 @@ document.addEventListener('DOMContentLoaded', () => {
     return hours;
   }
 
+  function computePendingDestinationCustomsHours(events, lastEvent, targetIso) {
+    if (!lastEvent || !targetIso) return 0;
+    const lastIso = (lastEvent.countryCode || '').toUpperCase();
+    const destIso = targetIso.toUpperCase();
+    if (lastIso === destIso) return 0;
+    const hasDestinationCustomsEvent = (events || []).some((evt) => {
+      const iso = (evt.countryCode || '').toUpperCase();
+      if (iso !== destIso) return false;
+      return /통관/.test(evt.statusText || '');
+    });
+    if (hasDestinationCustomsEvent) return 0;
+    return PENDING_DESTINATION_CUSTOMS_HOURS;
+  }
+
   function determineLastMileHours(targetIso, lastIso) {
     const normalizedTarget = (targetIso || DEFAULT_DESTINATION_ISO).toUpperCase();
     const normalizedLast = (lastIso || '').toUpperCase();
     if (normalizedTarget === 'KR' && normalizedLast === 'KR') {
-      return 8;
+      return 24;
     }
     if (normalizedTarget && normalizedTarget === normalizedLast) {
-      return 6;
+      return 24;
     }
-    return 12;
+    return 72;
   }
 
   function computeEtaConfidence(eventCount, remainingDistance) {
@@ -961,6 +979,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (detail.processingHours) {
       parts.push(`교환국/통관 ${Math.round(detail.processingHours)}시간`);
+    }
+    if (detail.destinationCustomsHours) {
+      parts.push(`도착통관 예상 ${Math.round(detail.destinationCustomsHours)}시간`);
     }
     if (detail.lastMileHours) {
       parts.push(`라스트마일 ${Math.round(detail.lastMileHours)}시간`);
@@ -1102,8 +1123,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const speed = TRANSPORT_SPEED_KMH[futureMode] || TRANSPORT_SPEED_KMH.air;
     const remainingTravelHours = remainingDistance > 5 ? (remainingDistance / speed) : 0;
     const processingHours = computePendingProcessingHours(lastEvent);
+    const destinationCustomsHours = computePendingDestinationCustomsHours(events, lastEvent, destination.iso);
     const lastMileHours = determineLastMileHours(destination.iso, lastEvent.countryCode);
-    const etaHours = remainingTravelHours + processingHours + lastMileHours;
+    const etaHours = remainingTravelHours + processingHours + destinationCustomsHours + lastMileHours;
     if (!Number.isFinite(etaHours)) return null;
     let etaTimestamp = lastEvent.timestampMs + (etaHours * 3600 * 1000);
     let etaRangeDisplay = '';
@@ -1135,7 +1157,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const etaHoursByCandidate = topCandidates.map((candidate) => {
             const remainingKm = Math.max(candidate.totalDistanceKm - observedDistance, 0);
             const travelHours = remainingKm > 5 ? (remainingKm / speed) : 0;
-            return travelHours + processingHours + lastMileHours;
+            return travelHours + processingHours + destinationCustomsHours + lastMileHours;
           });
           const minHours = Math.min(...etaHoursByCandidate);
           const maxHours = Math.max(...etaHoursByCandidate);
@@ -1165,12 +1187,14 @@ document.addEventListener('DOMContentLoaded', () => {
       remainingKm: remainingDistance,
       transportMode: futureMode,
       processingHours,
+      destinationCustomsHours,
       lastMileHours,
       confidence: computeEtaConfidence(sorted.length, remainingDistance),
       reason: buildEtaReason({
         remainingDistance,
         mode: futureMode,
         processingHours,
+        destinationCustomsHours,
         lastMileHours,
         routeDistanceMinKm,
         routeDistanceMaxKm,
