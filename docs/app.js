@@ -1649,15 +1649,13 @@ document.addEventListener('DOMContentLoaded', () => {
         // Letter 계열은 일반 우체국 API를 보조 후보로 둔다.
         pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
       } else if (serviceInfo?.serviceClass === 'parcel') {
-        // 소포 계열은 EMS 우선 후 일반 우체국 API를 보조 후보로 둔다.
+        // 소포 계열은(EMS 우선 전제) 일반 우체국 API를 보조 후보로 둔다.
         pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
       } else if (serviceInfo?.serviceClass === 'registered') {
         pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
-      } else if (serviceInfo?.serviceClass === 'ems') {
-        pushUnique('kr.epost', 'Korea Post');
-        pushUnique('un.upu.ems', 'UPU EMS (fallback)');
       } else {
         pushUnique('kr.epost', 'Korea Post');
+        pushUnique('un.upu.ems', 'UPU EMS (fallback)');
       }
     } else if (domesticPattern.test(normalized) || normalized.startsWith('KR')) {
       pushUnique('kr.epost', 'Korea Post');
