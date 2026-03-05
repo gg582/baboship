@@ -1650,7 +1650,7 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (serviceInfo?.serviceClass === 'letter_tracked') {
         // LA–LZ = UPU tracked letter (not EMS); use the generic Korea Post endpoint first
         pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
-        pushUnique('un.upu', 'UPU (fallback)');
+        pushUnique('un.upu.ems', 'UPU EMS (fallback)');
       } else if (serviceInfo?.serviceClass === 'registered') {
         pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
       } else if (serviceInfo?.serviceClass === 'parcel') {
