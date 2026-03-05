@@ -41,6 +41,40 @@
                             <span>송장번호</span>
                             <input type="text" id="tracking-number" placeholder="예: EG123456789KR" autocomplete="off">
                         </label>
+                        <label>
+                            <span>목적지 국가</span>
+                            <select id="tracking-destination-iso">
+                                <option value="KR" selected>🇰🇷 한국 (서울·인천)</option>
+                                <option value="US">🇺🇸 미국 (뉴욕)</option>
+                                <option value="JP">🇯🇵 일본 (도쿄)</option>
+                                <option value="CN">🇨🇳 중국 (상하이)</option>
+                                <option value="DE">🇩🇪 독일 (프랑크푸르트)</option>
+                                <option value="GB">🇬🇧 영국 (런던)</option>
+                                <option value="FR">🇫🇷 프랑스 (파리)</option>
+                                <option value="AU">🇦🇺 호주 (시드니)</option>
+                                <option value="CA">🇨🇦 캐나다 (토론토)</option>
+                                <option value="SG">🇸🇬 싱가포르</option>
+                                <option value="HK">🇭🇰 홍콩</option>
+                                <option value="IT">🇮🇹 이탈리아 (로마)</option>
+                                <option value="NL">🇳🇱 네덜란드 (암스테르담)</option>
+                                <option value="SE">🇸🇪 스웨덴 (스톡홀름)</option>
+                                <option value="AE">🇦🇪 UAE (두바이)</option>
+                                <option value="TH">🇹🇭 태국 (방콕)</option>
+                                <option value="MY">🇲🇾 말레이시아 (쿠알라룸푸르)</option>
+                                <option value="VN">🇻🇳 베트남 (호치민)</option>
+                                <option value="IN">🇮🇳 인도 (델리)</option>
+                                <option value="BR">🇧🇷 브라질 (상파울루)</option>
+                                <option value="RU">🇷🇺 러시아 (모스크바)</option>
+                                <option value="TR">🇹🇷 튀르키예 (이스탄불)</option>
+                                <option value="ZA">🇿🇦 남아프리카 (요하네스버그)</option>
+                                <option value="MX">🇲🇽 멕시코 (멕시코시티)</option>
+                                <option value="ES">🇪🇸 스페인 (마드리드)</option>
+                                <option value="FI">🇫🇮 핀란드 (헬싱키)</option>
+                                <option value="PH">🇵🇭 필리핀 (마닐라)</option>
+                                <option value="QA">🇶🇦 카타르 (도하)</option>
+                                <option value="SA">🇸🇦 사우디아라비아 (리야드)</option>
+                            </select>
+                        </label>
                         <button type="button" id="tracking-fetch-btn">우체국에서 불러오기</button>
                     </div>
                 </div>

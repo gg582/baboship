@@ -16,7 +16,8 @@ const state = {
   nativeMode: false,
   nativeHealth: null,
   nativeDirectCache: new Map(),
-  trackingRouteHintIntl: null
+  trackingRouteHintIntl: null,
+  trackingUserDestIso: 'KR'
 };
 
 // Global MapLibre map objects
@@ -214,6 +215,274 @@ const TOP_ROUTE_MAX_TRANSFERS = 5;
 const TOP_ROUTE_CANDIDATE_LIMIT = 24;
 const TOP_ROUTE_TAKE = 5;
 const PENDING_DESTINATION_CUSTOMS_HOURS = 96;
+
+// ---------------------------------------------------------------------------
+// Public holidays by ISO country code (2025–2026).
+// Each entry is a Set of 'YYYY-MM-DD' strings in the UTC calendar.
+// Weekends are handled separately in isBusinessDay(); these Sets contain only
+// named public / bank holidays (non-weekend days that suspend operations).
+// ---------------------------------------------------------------------------
+const COUNTRY_HOLIDAYS = (() => {
+  const d = {};
+  const mk = (...dates) => new Set(dates);
+
+  // Korea (관세청·우체국 공휴일)
+  d['KR'] = mk(
+    '2025-01-01','2025-01-28','2025-01-29','2025-01-30',
+    '2025-03-01','2025-05-05','2025-05-06','2025-06-06',
+    '2025-08-15','2025-10-03','2025-10-06','2025-10-07',
+    '2025-10-08','2025-10-09','2025-12-25',
+    '2026-01-01','2026-02-17','2026-02-18','2026-02-19',
+    '2026-03-01','2026-03-02','2026-05-05','2026-06-06',
+    '2026-08-15','2026-09-24','2026-09-25','2026-09-26',
+    '2026-10-03','2026-10-09','2026-12-25'
+  );
+
+  // Germany (Zoll / Deutsche Post – federal holidays only)
+  d['DE'] = mk(
+    '2025-01-01','2025-04-18','2025-04-21','2025-05-01',
+    '2025-05-29','2025-06-09','2025-10-03','2025-12-25','2025-12-26',
+    '2026-01-01','2026-04-03','2026-04-06','2026-05-01',
+    '2026-05-14','2026-05-25','2026-10-03','2026-12-25','2026-12-26'
+  );
+
+  // United States (USPS federal holidays)
+  d['US'] = mk(
+    '2025-01-01','2025-01-20','2025-02-17','2025-05-26',
+    '2025-06-19','2025-07-04','2025-09-01','2025-10-13',
+    '2025-11-11','2025-11-27','2025-12-25',
+    '2026-01-01','2026-01-19','2026-02-16','2026-05-25',
+    '2026-06-19','2026-07-03','2026-09-07','2026-10-12',
+    '2026-11-11','2026-11-26','2026-12-25'
+  );
+
+  // Japan (日本郵便 national holidays)
+  d['JP'] = mk(
+    '2025-01-01','2025-01-13','2025-02-11','2025-02-23',
+    '2025-03-20','2025-04-29','2025-05-03','2025-05-04',
+    '2025-05-05','2025-07-21','2025-08-11','2025-09-15',
+    '2025-09-23','2025-10-13','2025-11-03','2025-11-23','2025-11-24',
+    '2026-01-01','2026-01-12','2026-02-11','2026-02-23',
+    '2026-03-20','2026-04-29','2026-05-03','2026-05-04',
+    '2026-05-05','2026-05-06','2026-07-20','2026-08-11',
+    '2026-09-21','2026-09-22','2026-09-23','2026-10-12',
+    '2026-11-03','2026-11-23'
+  );
+
+  // China (海关 / 中国邮政 – golden week & national holidays)
+  d['CN'] = mk(
+    '2025-01-01',
+    '2025-01-28','2025-01-29','2025-01-30','2025-01-31',
+    '2025-02-03','2025-02-04',
+    '2025-04-04','2025-04-05','2025-04-07',
+    '2025-05-01','2025-05-02','2025-05-05',
+    '2025-05-31','2025-06-01','2025-06-02',
+    '2025-10-01','2025-10-02','2025-10-03','2025-10-04',
+    '2025-10-05','2025-10-06','2025-10-07','2025-10-08',
+    '2026-01-01',
+    '2026-02-17','2026-02-18','2026-02-19','2026-02-20',
+    '2026-02-23','2026-02-24',
+    '2026-04-04','2026-04-06',
+    '2026-05-01','2026-05-04','2026-05-05',
+    '2026-10-01','2026-10-02','2026-10-03','2026-10-04',
+    '2026-10-05','2026-10-06','2026-10-07','2026-10-08'
+  );
+
+  // United Kingdom (Royal Mail bank holidays – England & Wales)
+  d['GB'] = mk(
+    '2025-01-01','2025-04-18','2025-04-21','2025-05-05',
+    '2025-05-26','2025-08-25','2025-12-25','2025-12-26',
+    '2026-01-01','2026-04-03','2026-04-06','2026-05-04',
+    '2026-05-25','2026-08-31','2026-12-25','2026-12-28'
+  );
+
+  // France (La Poste jours fériés)
+  d['FR'] = mk(
+    '2025-01-01','2025-04-21','2025-05-01','2025-05-08',
+    '2025-05-29','2025-06-09','2025-07-14','2025-08-15',
+    '2025-11-01','2025-11-11','2025-12-25',
+    '2026-01-01','2026-04-06','2026-05-01','2026-05-08',
+    '2026-05-14','2026-05-25','2026-07-14','2026-08-15',
+    '2026-11-01','2026-11-11','2026-12-25'
+  );
+
+  // Australia (Australia Post – nationwide + NSW)
+  d['AU'] = mk(
+    '2025-01-01','2025-01-27','2025-04-18','2025-04-19',
+    '2025-04-20','2025-04-21','2025-04-25','2025-06-09',
+    '2025-12-25','2025-12-26',
+    '2026-01-01','2026-01-26','2026-04-03','2026-04-05',
+    '2026-04-06','2026-04-25','2026-06-08','2026-12-25','2026-12-28'
+  );
+
+  // Canada (Canada Post federal statutory holidays)
+  d['CA'] = mk(
+    '2025-01-01','2025-02-17','2025-04-18','2025-05-19',
+    '2025-07-01','2025-08-04','2025-09-01','2025-10-13',
+    '2025-11-11','2025-12-25','2025-12-26',
+    '2026-01-01','2026-02-16','2026-04-03','2026-05-18',
+    '2026-07-01','2026-09-07','2026-10-12',
+    '2026-11-11','2026-12-25','2026-12-28'
+  );
+
+  // Singapore (SingPost public holidays)
+  d['SG'] = mk(
+    '2025-01-01','2025-01-29','2025-01-30','2025-03-31',
+    '2025-04-18','2025-05-01','2025-05-12','2025-06-07',
+    '2025-08-09','2025-10-20','2025-12-25',
+    '2026-01-01','2026-01-17','2026-01-18','2026-03-20',
+    '2026-04-03','2026-05-01','2026-06-26',
+    '2026-08-09','2026-11-08','2026-12-25'
+  );
+
+  // Hong Kong (Hongkong Post public holidays)
+  d['HK'] = mk(
+    '2025-01-01','2025-01-29','2025-01-30','2025-01-31',
+    '2025-04-04','2025-04-18','2025-04-19','2025-04-21',
+    '2025-05-01','2025-05-05','2025-05-31','2025-07-01',
+    '2025-10-01','2025-10-07','2025-11-26',
+    '2025-12-25','2025-12-26',
+    '2026-01-01','2026-02-17','2026-02-18','2026-02-19',
+    '2026-04-03','2026-04-05','2026-04-06','2026-05-01',
+    '2026-05-24','2026-06-20','2026-07-01',
+    '2026-10-01','2026-10-26','2026-12-25','2026-12-26'
+  );
+
+  // Italy (Poste Italiane festività nazionali)
+  d['IT'] = mk(
+    '2025-01-01','2025-01-06','2025-04-21','2025-04-25',
+    '2025-05-01','2025-06-02','2025-08-15','2025-11-01',
+    '2025-12-08','2025-12-25','2025-12-26',
+    '2026-01-01','2026-01-06','2026-04-06','2026-04-25',
+    '2026-05-01','2026-06-02','2026-08-15','2026-11-01',
+    '2026-12-08','2026-12-25','2026-12-26'
+  );
+
+  // Netherlands (PostNL nationale feestdagen)
+  d['NL'] = mk(
+    '2025-01-01','2025-04-18','2025-04-21','2025-04-26',
+    '2025-05-05','2025-05-29','2025-06-09','2025-12-25','2025-12-26',
+    '2026-01-01','2026-04-03','2026-04-06','2026-04-25',
+    '2026-05-14','2026-05-25','2026-12-25','2026-12-26'
+  );
+
+  // Sweden (PostNord helgdagar)
+  d['SE'] = mk(
+    '2025-01-01','2025-01-06','2025-04-18','2025-04-21',
+    '2025-05-01','2025-05-29','2025-06-06','2025-06-21',
+    '2025-11-01','2025-12-25','2025-12-26',
+    '2026-01-01','2026-01-06','2026-04-03','2026-04-06',
+    '2026-05-01','2026-05-14','2026-06-06','2026-06-20',
+    '2026-11-07','2026-12-25','2026-12-26'
+  );
+
+  // UAE (Emirates Post public holidays – approximate)
+  d['AE'] = mk(
+    '2025-01-01','2025-03-28','2025-03-29','2025-03-30',
+    '2025-04-18','2025-05-01','2025-06-06','2025-06-07',
+    '2025-06-25','2025-06-26','2025-07-04','2025-12-01','2025-12-02',
+    '2026-01-01','2026-03-17','2026-03-18','2026-03-19',
+    '2026-05-01','2026-05-26','2026-05-27',
+    '2026-06-14','2026-06-15','2026-11-30','2026-12-01','2026-12-02'
+  );
+
+  // Thailand (Thailand Post วันหยุดราชการ)
+  d['TH'] = mk(
+    '2025-01-01','2025-02-12','2025-04-06','2025-04-13',
+    '2025-04-14','2025-04-15','2025-05-01','2025-05-05',
+    '2025-05-12','2025-06-03','2025-07-10','2025-07-28',
+    '2025-08-12','2025-10-13','2025-10-23','2025-12-05','2025-12-10','2025-12-31',
+    '2026-01-01','2026-02-01','2026-04-06','2026-04-13',
+    '2026-04-14','2026-04-15','2026-05-01','2026-05-11',
+    '2026-05-25','2026-06-03','2026-07-01','2026-07-27',
+    '2026-08-12','2026-10-13','2026-10-23','2026-12-05','2026-12-10','2026-12-31'
+  );
+
+  // Malaysia (Pos Malaysia – nationwide federal holidays)
+  d['MY'] = mk(
+    '2025-01-01','2025-01-29','2025-01-30','2025-02-01',
+    '2025-03-28','2025-04-18','2025-05-01','2025-05-12',
+    '2025-06-02','2025-06-07','2025-08-31','2025-09-16',
+    '2025-10-20','2025-12-25',
+    '2026-01-01','2026-02-17','2026-02-18',
+    '2026-03-17','2026-04-03','2026-05-01',
+    '2026-05-25','2026-05-31','2026-08-31',
+    '2026-09-16','2026-11-08','2026-12-25'
+  );
+
+  return d;
+})();
+
+// ---------------------------------------------------------------------------
+// Business-day calendar helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true when the given UTC date is a working day for the specified
+ * country: not a Saturday, not a Sunday, and not a listed public holiday.
+ *
+ * Saturday counts as a working day when `includeSaturday` is true (used for
+ * postal last-mile delivery which typically runs Mon–Sat).
+ *
+ * @param {Date|number} dateOrMs  - UTC Date object or Unix timestamp (ms)
+ * @param {string}      iso       - ISO-3166-1 alpha-2 country code
+ * @param {boolean}     includeSaturday
+ * @returns {boolean}
+ */
+function isBusinessDay(dateOrMs, iso, includeSaturday = false) {
+  const d = dateOrMs instanceof Date ? dateOrMs : new Date(dateOrMs);
+  const dow = d.getUTCDay(); // 0=Sun … 6=Sat
+  if (dow === 0) return false; // always closed on Sunday
+  if (dow === 6 && !includeSaturday) return false;
+  const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  return !(COUNTRY_HOLIDAYS[iso] || new Set()).has(key);
+}
+
+/**
+ * Advances `startMs` by `hours` worth of effective working hours, skipping
+ * weekends and public holidays for `iso`.  The entire 24h of each working day
+ * is counted (customs/sorting facilities run round-the-clock on business days).
+ * When `includeSaturday` is true Saturday is treated as a working day (last-
+ * mile postal delivery model).
+ *
+ * Returns the resulting calendar timestamp (ms).
+ *
+ * @param {number}  startMs
+ * @param {number}  hours            effective working hours to add
+ * @param {string}  iso              ISO-3166-1 alpha-2 country code
+ * @param {boolean} includeSaturday
+ * @returns {number}
+ */
+function addBusinessHoursCalendar(startMs, hours, iso, includeSaturday = false) {
+  if (!Number.isFinite(startMs) || !Number.isFinite(hours) || hours <= 0) {
+    return startMs;
+  }
+  let current = startMs;
+  let remaining = hours;
+  let guard = 0;
+  const MAX_GUARD = Math.ceil(hours) + 366 * 24; // worst case: one holiday per day for a year
+  while (remaining > 0 && guard < MAX_GUARD) {
+    guard++;
+    const d = new Date(current);
+    if (!isBusinessDay(d, iso, includeSaturday)) {
+      // Skip to the start of the next UTC day
+      const next = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+      current = next;
+      continue;
+    }
+    // Working day: consume until end of this UTC day
+    const endOfDay = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+    const hoursLeft = (endOfDay - current) / 3600000;
+    if (remaining <= hoursLeft) {
+      current += remaining * 3600000;
+      remaining = 0;
+    } else {
+      remaining -= hoursLeft;
+      current = endOfDay;
+    }
+  }
+  return current;
+}
 
 const SEA_KEYWORDS = [/PORT/i, /TERMINAL/i, /WHARF/i, /부두/, /항\b/, /碼頭/];
 const LAND_KEYWORDS = [/허브/, /센터/, /물류/, /소포/, /delivery/i, /hub/i];
@@ -555,6 +824,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const trackingMetricsDomestic = document.getElementById('tracking-metrics-domestic');
   const trackingStatusDomestic = document.getElementById('tracking-status-domestic');
   const trackingFetchBtnDomestic = document.getElementById('tracking-fetch-btn-domestic');
+  const trackingDestinationSelect = document.getElementById('tracking-destination-iso');
   const maritimePanel = document.getElementById('maritime-panel');
 
   // --- MapLibre GL JS Integration ---
@@ -1068,7 +1338,12 @@ document.addEventListener('DOMContentLoaded', () => {
     return `${from.format('M월D일')}-${to.format('M월D일')} 내`;
   }
 
-  function resolveDestinationHub(events, lastEvent) {
+  function resolveDestinationHub(events, lastEvent, userIso = null) {
+    // User-specified destination takes priority
+    if (userIso) {
+      const userHub = resolveCountryHubNode(userIso.toUpperCase());
+      if (userHub) return userHub;
+    }
     const isoCounts = new Map();
     for (const evt of events || []) {
       const iso = (evt.countryCode || '').trim().toUpperCase();
@@ -1096,7 +1371,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return null;
   }
 
-  async function estimateDeliveryEta(events, routeHint = null) {
+  async function estimateDeliveryEta(events, routeHint = null, userDestIso = null) {
     if (!Array.isArray(events) || events.length === 0) return null;
     if (events.some((evt) => isDeliveredEvent(evt))) {
       return { delivered: true };
@@ -1112,8 +1387,25 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!enrichable.length) return null;
     const sorted = enrichable.slice().sort((a, b) => a.timestampMs - b.timestampMs);
     const lastEvent = sorted[sorted.length - 1];
-    const destination = resolveDestinationHub(events, lastEvent);
+
+    // Resolve destination, honouring the user-selected ISO code
+    const effectiveUserIso = (userDestIso || state.trackingUserDestIso || '').toUpperCase() || null;
+    const destination = resolveDestinationHub(events, lastEvent, effectiveUserIso);
     if (!destination || typeof lastEvent.timestampMs !== 'number') return null;
+
+    // When the user picked a destination, inject it into the route-hint if not already set
+    if (effectiveUserIso && destination.code && !routeHint?.destinationCode) {
+      routeHint = { ...(routeHint || {}), destinationCode: destination.code };
+    }
+    // Similarly try to infer origin from the first event when missing
+    if (routeHint && !routeHint.originCode && sorted.length) {
+      const firstEvt = sorted[0];
+      const inferredOrigin = extractRouteAlias(firstEvt.alias, firstEvt.countryCode);
+      if (inferredOrigin && inferredOrigin !== routeHint.destinationCode) {
+        routeHint = { ...routeHint, originCode: inferredOrigin };
+      }
+    }
+
     let remainingDistance = 0;
     if (typeof lastEvent.lat === 'number' && typeof lastEvent.lon === 'number') {
       remainingDistance = haversineKm(lastEvent.lat, lastEvent.lon, destination.lat, destination.lon);
@@ -1125,9 +1417,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const processingHours = computePendingProcessingHours(lastEvent);
     const destinationCustomsHours = computePendingDestinationCustomsHours(events, lastEvent, destination.iso);
     const lastMileHours = determineLastMileHours(destination.iso, lastEvent.countryCode);
-    const etaHours = remainingTravelHours + processingHours + destinationCustomsHours + lastMileHours;
-    if (!Number.isFinite(etaHours)) return null;
-    let etaTimestamp = lastEvent.timestampMs + (etaHours * 3600 * 1000);
+    const destIso = (destination.iso || effectiveUserIso || DEFAULT_DESTINATION_ISO).toUpperCase();
+
+    // Travel + origin-exchange-office processing are continuous (24/7)
+    const travelAndProcessEndMs = lastEvent.timestampMs + (remainingTravelHours + processingHours) * 3600000;
+    // Destination customs: business days only (Mon–Fri, no public holidays in dest country)
+    const customsEndMs = addBusinessHoursCalendar(travelAndProcessEndMs, destinationCustomsHours, destIso, false);
+    // Last-mile delivery: Mon–Sat, no public holidays in dest country
+    const etaTimestampBase = addBusinessHoursCalendar(customsEndMs, lastMileHours, destIso, true);
+
+    if (!Number.isFinite(etaTimestampBase)) return null;
+    let etaTimestamp = etaTimestampBase;
     let etaRangeDisplay = '';
     let routeDistanceMinKm = 0;
     let routeDistanceMaxKm = 0;
@@ -1154,15 +1454,15 @@ document.addEventListener('DOMContentLoaded', () => {
           const observedDistance = observedDistanceBase;
           routeDistanceMinKm = topCandidates[0].totalDistanceKm;
           routeDistanceMaxKm = topCandidates[topCandidates.length - 1].totalDistanceKm;
-          const etaHoursByCandidate = topCandidates.map((candidate) => {
+          const etaTimestampsByCandidate = topCandidates.map((candidate) => {
             const remainingKm = Math.max(candidate.totalDistanceKm - observedDistance, 0);
-            const travelHours = remainingKm > 5 ? (remainingKm / speed) : 0;
-            return travelHours + processingHours + destinationCustomsHours + lastMileHours;
+            const travelHrs = remainingKm > 5 ? (remainingKm / speed) : 0;
+            const candidateTravelEndMs = lastEvent.timestampMs + (travelHrs + processingHours) * 3600000;
+            const candidateCustomsEndMs = addBusinessHoursCalendar(candidateTravelEndMs, destinationCustomsHours, destIso, false);
+            return addBusinessHoursCalendar(candidateCustomsEndMs, lastMileHours, destIso, true);
           });
-          const minHours = Math.min(...etaHoursByCandidate);
-          const maxHours = Math.max(...etaHoursByCandidate);
-          const minTimestamp = lastEvent.timestampMs + (minHours * 3600 * 1000);
-          const maxTimestamp = lastEvent.timestampMs + (maxHours * 3600 * 1000);
+          const minTimestamp = Math.min(...etaTimestampsByCandidate);
+          const maxTimestamp = Math.max(...etaTimestampsByCandidate);
           etaTimestamp = minTimestamp;
           remainingRangeMinKm = Math.max(routeDistanceMinKm - observedDistance, 0);
           remainingRangeMaxKm = Math.max(routeDistanceMaxKm - observedDistance, 0);
@@ -1189,6 +1489,7 @@ document.addEventListener('DOMContentLoaded', () => {
       processingHours,
       destinationCustomsHours,
       lastMileHours,
+      destIso,
       confidence: computeEtaConfidence(sorted.length, remainingDistance),
       reason: buildEtaReason({
         remainingDistance,
@@ -1474,11 +1775,16 @@ document.addEventListener('DOMContentLoaded', () => {
         <strong>${result.eta.etaRangeDisplay}</strong>
       </div>`);
       }
+      const destIso = result.eta.destIso || '';
+      const calNote = destIso && COUNTRY_HOLIDAYS[destIso]
+        ? `<small class="cal-note">📅 ${destIso} 영업일·공휴일 반영</small>`
+        : '';
       parts.push(`
       <div class="metric eta">
         <span>예상 배송완료</span>
         <strong>${result.eta.etaDisplay}</strong>
         ${result.eta.reason ? `<small>${result.eta.reason}</small>` : ''}
+        ${calNote}
       </div>`);
       parts.push(`
       <div class="metric">
@@ -1521,7 +1827,8 @@ document.addEventListener('DOMContentLoaded', () => {
       setTrackingStatus(trackingStatusIntl, '분석할 이벤트 문자열이 없습니다.', 'error');
       return;
     }
-    const etaInfo = await estimateDeliveryEta(state.trackingEventsIntl, state.trackingRouteHintIntl);
+    const userDestIso = (trackingDestinationSelect?.value || state.trackingUserDestIso || 'KR').toUpperCase();
+    const etaInfo = await estimateDeliveryEta(state.trackingEventsIntl, state.trackingRouteHintIntl, userDestIso);
     state.trackingEtaIntl = etaInfo || null;
     if (state.kernel && typeof state.kernel.analyzeTracking === 'function') {
       try {
@@ -1697,6 +2004,15 @@ document.addEventListener('DOMContentLoaded', () => {
   modeTabs.forEach(tab => tab.addEventListener('click', () => setActivePanel(tab.dataset.modeTab || 'manual')));
   if (trackingFetchBtnIntl) trackingFetchBtnIntl.addEventListener('click', () => { handleTrackingFetchIntl().catch(err => console.error(err)); });
   if (trackingAnalyzeBtnIntl && trackingLogInputIntl) trackingAnalyzeBtnIntl.addEventListener('click', () => { runTrackingAnalysisIntl(trackingLogInputIntl.value).catch(err => console.error(err)); });
+  if (trackingDestinationSelect) {
+    trackingDestinationSelect.addEventListener('change', () => {
+      state.trackingUserDestIso = trackingDestinationSelect.value || 'KR';
+      // Re-run analysis with new destination if events are already loaded
+      if (state.trackingEventsIntl.length && trackingLogInputIntl) {
+        runTrackingAnalysisIntl(trackingLogInputIntl.value).catch(err => console.error(err));
+      }
+    });
+  }
   if (trackingNumberInputIntl) {
     trackingNumberInputIntl.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
