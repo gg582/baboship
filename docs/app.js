@@ -150,6 +150,13 @@ const TRACKER_API_KEY = trackerConfig.trackerApiKey || '';
 const ORS_API_KEY = trackerConfig.orsApiKey || ''; // Placeholder for ORS API Key
 const ORS_BASE_URL = 'https://api.openrouteservice.org/v2/directions/driving-car'; // ORS Directions API
 
+// OpenSky Network API (https://opensky-network.org/apidoc/)
+// Anonymous: 400 credits/day, 10-sec resolution, current state only, ~3-5 min between calls
+// Registered: 4,000 credits/day, 5-sec resolution, 1-hour history, ~20-30 sec between calls
+const OPENSKY_API_BASE = 'https://opensky-network.org/api';
+// How far back to look when querying OpenSky arrivals (seconds).
+const OPENSKY_LOOKBACK_SECONDS = 12 * 3600; // 12 hours
+
 const TRANSPORT_SPEED_KMH = {
   air: 550,
   sea: 36,
@@ -204,6 +211,462 @@ const HARD_CODED_NODE_FALLBACKS = {
   FRA: { code: 'FRA', lat: 50.0379, lon: 8.5622, layer: 'air' },
   LHR: { code: 'LHR', lat: 51.4700, lon: -0.4543, layer: 'air' }
 };
+
+// ─── Postal EDI Routing Code Detection ───────────────────────────────────
+// Strings such as "UAIEVCKRSELBAUX60062" are postal dispatch routing identifiers
+// (likely UPU CARDIT/RESDIT format), NOT SITA/ARINC Type-B addresses.
+// SITA Type-B addresses are 7-8 chars with no digits (e.g. "KLMOPS", "DLHCKG").
+//
+// Postal routing code structure (example UAIEVCKRSELBAUX60062):
+//   UA    – origin postal network / airline code
+//   IEV   – origin airport/city (Kyiv)
+//   CK    – cargo/handling code
+//   KR    – destination country (Korea)
+//   SEL   – destination city (Seoul)
+//   BAUX  – routing group / handling agent
+//   60062 – sequence number
+//
+// Detection strategy: find uppercase-letter sequences (4+ chars) that contain
+// embedded known IATA/city codes, followed by a 4-6 digit sequence number.
+// Matches postal routing reference codes: a run of 4+ uppercase letters
+// (negative lookbehind ensures it doesn't start mid-word) followed by 4-6 digits
+// (negative lookahead ensures the digits aren't part of a longer number).
+// Example match: "UAIEVCKRSELBAUX60062" → block="UAIEVCKRSELBAUX", seq="60062"
+const POSTAL_ROUTING_CODE_RE = /(?<![A-Z])([A-Z]{4,})(\d{4,6})(?!\d)/g;
+
+// IATA airport codes and postal city codes → ICAO airport codes.
+// Postal EDI routing (e.g. UPU CARDIT/RESDIT) uses 3-letter city/airport codes
+// that are sometimes city codes (SEL=Seoul) rather than IATA airport codes (ICN).
+const IATA_TO_ICAO_MAP = {
+  // Korea
+  ICN: 'RKSI', GMP: 'RKSS', PUS: 'RKPK', CJU: 'RKPC', SEL: 'RKSI',
+  // Japan
+  NRT: 'RJAA', HND: 'RJTT', KIX: 'RJBB', NGO: 'RJGG', TYO: 'RJAA',
+  OSA: 'RJBB',
+  // China
+  PEK: 'ZBAA', PVG: 'ZSPD', CAN: 'ZGGG', SHA: 'ZSSS', CTU: 'ZUUU',
+  BJS: 'ZBAA', SZX: 'ZGSZ',
+  // Hong Kong / Macau
+  HKG: 'VHHH',
+  // Southeast Asia
+  SIN: 'WSSS', KUL: 'WMKK', BKK: 'VTBS', SGN: 'VVTS', HAN: 'VVNB',
+  MNL: 'RPLL', CGK: 'WIII', DPS: 'WADD', RGN: 'VYYY',
+  // South Asia
+  DEL: 'VIDP', BOM: 'VABB', MAA: 'VOMM', CCU: 'VECC',
+  // Middle East
+  DXB: 'OMDB', AUH: 'OMAA', DOH: 'OTHH', KWI: 'OKBK', BAH: 'OBBI',
+  RUH: 'OERK', CAI: 'HECA',
+  // Europe – Western
+  LHR: 'EGLL', LGW: 'EGKK', MAN: 'EGCC', LON: 'EGLL',
+  CDG: 'LFPG', ORY: 'LFPO', PAR: 'LFPG',
+  FRA: 'EDDF', MUC: 'EDDM',
+  AMS: 'EHAM',
+  MAD: 'LEMD',
+  FCO: 'LIRF', MXP: 'LIMC', MIL: 'LIMC',
+  ZRH: 'LSZH',
+  BRU: 'EBBR',
+  VIE: 'LOWW',
+  LIS: 'LPPT',
+  ATH: 'LGAV',
+  // Europe – Nordic/Eastern
+  ARN: 'ESSA', HEL: 'EFHK', CPH: 'EKCH', OSL: 'ENGM',
+  WAW: 'EPWA', PRG: 'LKPR', BUD: 'LHBP',
+  SVO: 'UUEE', DME: 'UUDD', MOS: 'UUEE',
+  IEV: 'UKBB', KBP: 'UKBB',
+  IST: 'LTBA',
+  // Africa
+  JNB: 'FAOR', CPT: 'FACT', CAI: 'HECA', ADD: 'HAAB', NBO: 'HKJK',
+  // Oceania
+  SYD: 'YSSY', MEL: 'YMML', BNE: 'YBBN', PER: 'YPPH', AKL: 'NZAA',
+  // North America
+  JFK: 'KJFK', LAX: 'KLAX', ORD: 'KORD', SFO: 'KSFO', MIA: 'KMIA',
+  ATL: 'KATL', DFW: 'KDFW', SEA: 'KSEA', BOS: 'KBOS', LAS: 'KLAS',
+  NYC: 'KJFK', CHI: 'KORD',
+  YYZ: 'CYYZ', YVR: 'CYVR', YUL: 'CYUL',
+  MEX: 'MMMX',
+  // South America
+  GRU: 'SBGR', SCL: 'SCEL', BOG: 'SKBO', LIM: 'SPJC', EZE: 'SAEZ',
+  SAO: 'SBGR'
+};
+
+function iataToIcao(code) {
+  return IATA_TO_ICAO_MAP[(code || '').toUpperCase()] || null;
+}
+
+// Scan a string for all embedded 3-letter codes known from IATA_TO_ICAO_MAP.
+// Returns matches in the order they appear, deduped but preserving sequence.
+function scanEmbeddedAirportCodes(str) {
+  const found = [];
+  const seen = new Set();
+  for (let i = 0; i <= str.length - 3; i++) {
+    const candidate = str.slice(i, i + 3).toUpperCase();
+    if (!seen.has(candidate) && IATA_TO_ICAO_MAP[candidate]) {
+      found.push(candidate);
+      seen.add(candidate);
+    }
+  }
+  return found;
+}
+
+// Parse postal EDI routing codes from free text.
+// A routing code is a sequence of 4+ uppercase letters followed by 4-6 digits
+// (e.g. "UAIEVCKRSELBAUX60062"). Returns an array of parsed entries.
+function parsePostalRoutingCodes(text) {
+  if (!text || typeof text !== 'string') return [];
+  const results = [];
+  let m;
+  POSTAL_ROUTING_CODE_RE.lastIndex = 0;
+  while ((m = POSTAL_ROUTING_CODE_RE.exec(text)) !== null) {
+    const block = m[1];
+    const sequence = m[2];
+    const airports = scanEmbeddedAirportCodes(block);
+    if (airports.length >= 1) {
+      results.push({ raw: m[0], block, sequence, airports });
+    }
+  }
+  return results;
+}
+
+// Top-level extractor: returns route hint {originCode, destCode, allCodes, rawCodes}
+// or null when no routing codes with recognisable airport codes are found.
+function extractRouteFromPostalCodes(data) {
+  const text = JSON.stringify(data);
+  const codes = parsePostalRoutingCodes(text);
+  if (!codes.length) return null;
+  const allAirports = [];
+  for (const rc of codes) allAirports.push(...rc.airports);
+  const unique = [...new Set(allAirports)].filter(Boolean);
+  if (!unique.length) return null;
+  return {
+    rawCodes: codes.map(r => r.raw),
+    originCode: unique[0],
+    destCode: unique[unique.length - 1],
+    allCodes: unique
+  };
+}
+
+
+// Credentials are stored in localStorage as plain text (no encryption).
+// Users should use a dedicated OpenSky account, NOT their primary password.
+// A visible warning is shown in the UI when the registered mode is selected.
+const OPENSKY_CREDS_KEY = 'baboship_opensky_creds';
+
+function getOpenSkyCredentials() {
+  try {
+    const raw = localStorage.getItem(OPENSKY_CREDS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (_) { /* ignore */ }
+  return { username: '', password: '' };
+}
+
+function saveOpenSkyCredentials(username, password) {
+  try {
+    localStorage.setItem(OPENSKY_CREDS_KEY, JSON.stringify({ username, password }));
+  } catch (_) { /* ignore */ }
+}
+
+function clearOpenSkyCredentials() {
+  try { localStorage.removeItem(OPENSKY_CREDS_KEY); } catch (_) { /* ignore */ }
+}
+
+function isOpenSkyAuthenticated() {
+  const { username, password } = getOpenSkyCredentials();
+  return !!(username && password);
+}
+
+function getOpenSkyHeaders() {
+  const { username, password } = getOpenSkyCredentials();
+  if (username && password) {
+    return { Authorization: 'Basic ' + btoa(`${username}:${password}`) };
+  }
+  return {};
+}
+
+// ─── OpenSky Network – API Calls ─────────────────────────────────────────
+// Rate-limit guidance (2026):
+//   Anonymous  : ~3-5 min interval; 400 credits/day; 10-sec resolution
+//   Registered : ~20-30 sec interval; 4,000 credits/day; 5-sec resolution
+// Cost per call:
+//   /states/all (worldwide)    : 4 credits
+//   /states/all?icao24=…       : 1 credit   ← prefer this
+//   /flights/arrival or departure: 1 credit (registered only)
+
+async function fetchOpenSkyStateByIcao24(icao24) {
+  const url = `${OPENSKY_API_BASE}/states/all?icao24=${encodeURIComponent(icao24.toLowerCase())}`;
+  const resp = await fetch(url, { headers: getOpenSkyHeaders() });
+  if (resp.status === 429) throw new Error('OpenSky 호출 한도 초과 (HTTP 429). 잠시 후 다시 시도하세요.');
+  if (!resp.ok) throw new Error(`OpenSky HTTP ${resp.status}`);
+  const data = await resp.json();
+  return Array.isArray(data?.states) ? data.states : [];
+}
+
+async function fetchOpenSkyArrivals(icaoAirport, beginTs, endTs) {
+  if (!isOpenSkyAuthenticated()) return [];
+  const url = `${OPENSKY_API_BASE}/flights/arrival?airport=${encodeURIComponent(icaoAirport)}&begin=${beginTs}&end=${endTs}`;
+  const resp = await fetch(url, { headers: getOpenSkyHeaders() });
+  if (resp.status === 429) throw new Error('OpenSky 호출 한도 초과 (HTTP 429).');
+  if (resp.status === 404) return [];
+  if (!resp.ok) throw new Error(`OpenSky HTTP ${resp.status}`);
+  const data = await resp.json();
+  return Array.isArray(data) ? data : [];
+}
+
+async function fetchOpenSkyDepartures(icaoAirport, beginTs, endTs) {
+  if (!isOpenSkyAuthenticated()) return [];
+  const url = `${OPENSKY_API_BASE}/flights/departure?airport=${encodeURIComponent(icaoAirport)}&begin=${beginTs}&end=${endTs}`;
+  const resp = await fetch(url, { headers: getOpenSkyHeaders() });
+  if (resp.status === 429) throw new Error('OpenSky 호출 한도 초과 (HTTP 429).');
+  if (resp.status === 404) return [];
+  if (!resp.ok) throw new Error(`OpenSky HTTP ${resp.status}`);
+  const data = await resp.json();
+  return Array.isArray(data) ? data : [];
+}
+
+// Bounding-box query for anonymous mode (4 credits).
+// Bbox airport lookup radiuses (degrees): ~0.5° ≈ 55 km – covers most airport approach zones.
+async function fetchOpenSkyStatesByBbox(lamin, lomin, lamax, lomax) {
+  const params = new URLSearchParams({
+    lamin: lamin.toFixed(4),
+    lomin: lomin.toFixed(4),
+    lamax: lamax.toFixed(4),
+    lomax: lomax.toFixed(4)
+  });
+  const url = `${OPENSKY_API_BASE}/states/all?${params}`;
+  const resp = await fetch(url, { headers: getOpenSkyHeaders() });
+  if (resp.status === 429) throw new Error('OpenSky 호출 한도 초과 (HTTP 429). 잠시 후 다시 시도하세요.');
+  if (!resp.ok) throw new Error(`OpenSky HTTP ${resp.status}`);
+  const data = await resp.json();
+  return Array.isArray(data?.states) ? data.states : [];
+}
+
+// ─── OpenSky State Vector helpers ────────────────────────────────────────
+// OpenSky state vector index positions (from API docs):
+// [0]=icao24 [1]=callsign [2]=origin_country [3]=time_position [4]=last_contact
+// [5]=longitude [6]=latitude [7]=baro_altitude [8]=on_ground [9]=velocity
+// [10]=true_track [11]=vertical_rate [12]=sensors [13]=geo_altitude
+// [14]=squawk [15]=spi [16]=position_source
+function stateVectorToObject(sv) {
+  if (!Array.isArray(sv) || sv.length < 9) return null;
+  return {
+    icao24: sv[0],
+    callsign: (sv[1] || '').trim(),
+    originCountry: sv[2],
+    lat: sv[6],
+    lon: sv[5],
+    baroAltitudeM: sv[7],
+    onGround: sv[8],
+    velocityMs: sv[9],
+    trueTrack: sv[10],
+    verticalRateMs: sv[11],
+    lastContact: sv[4]
+  };
+}
+
+// ─── Adaptive Polling State ───────────────────────────────────────────────
+const openSkyPolling = {
+  timerId: null,
+  icao24: null,
+  onUpdate: null,
+  consecutiveErrors: 0
+};
+
+// Upsert an OpenSky-derived event into an events array, keyed by icao24.
+// Replaces an existing entry for the same aircraft, or appends if none exists.
+function upsertOpenSkyEvent(events, newEvent) {
+  const idx = events.findIndex(e => e.openSkyIcao24 === newEvent.openSkyIcao24);
+  if (idx >= 0) { events[idx] = newEvent; } else { events.push(newEvent); }
+}
+
+function stopOpenSkyPolling() {
+  if (openSkyPolling.timerId !== null) {
+    clearTimeout(openSkyPolling.timerId);
+    openSkyPolling.timerId = null;
+  }
+  openSkyPolling.icao24 = null;
+  openSkyPolling.onUpdate = null;
+  openSkyPolling.consecutiveErrors = 0;
+}
+
+function scheduleOpenSkyPoll(icao24, onUpdate, intervalMs) {
+  openSkyPolling.icao24 = icao24;
+  openSkyPolling.onUpdate = onUpdate;
+  openSkyPolling.timerId = setTimeout(async () => {
+    try {
+      const states = await fetchOpenSkyStateByIcao24(icao24);
+      const sv = states.length ? stateVectorToObject(states[0]) : null;
+      openSkyPolling.consecutiveErrors = 0;
+      if (sv) {
+        onUpdate({ type: 'position', sv });
+        if (sv.onGround) {
+          onUpdate({ type: 'landed', sv });
+          stopOpenSkyPolling();
+          return;
+        }
+        // Adaptive interval: near ground (<3000 m) → 30 s; cruising → 5 min
+        // Use baroAltitudeM only; verticalRateMs is climb rate (m/s), not altitude.
+        const altitude = sv.baroAltitudeM ?? 10000;
+        const nextMs = (typeof altitude === 'number' && altitude < 3000) ? 30_000 : 300_000;
+        scheduleOpenSkyPoll(icao24, onUpdate, nextMs);
+      } else {
+        scheduleOpenSkyPoll(icao24, onUpdate, 300_000);
+      }
+    } catch (err) {
+      openSkyPolling.consecutiveErrors++;
+      if (openSkyPolling.consecutiveErrors < 3) {
+        scheduleOpenSkyPoll(icao24, onUpdate, 300_000);
+      } else {
+        stopOpenSkyPolling();
+      }
+    }
+  }, intervalMs);
+}
+
+function startOpenSkyAdaptivePolling(icao24, onUpdate) {
+  stopOpenSkyPolling();
+  const initialMs = isOpenSkyAuthenticated() ? 30_000 : 300_000;
+  scheduleOpenSkyPoll(icao24, onUpdate, initialMs);
+}
+
+// ─── Postal EDI Routing → OpenSky Flight Detection ───────────────────────
+// When the Korea Post API response contains a postal routing reference code
+// (e.g. UPU CARDIT/RESDIT dispatch identifier like "UAIEVCKRSELBAUX60062"),
+// we parse the embedded airport codes to infer origin/destination, then query
+// OpenSky for cargo flights on the actual hub-connected route.
+//
+// Important: a routing code like IEV→SEL does NOT imply a direct flight.
+// Typical Ukraine→Korea EMS route: Kyiv → Warsaw/Riga/Frankfurt → Incheon.
+// We therefore expand the origin→destination pair into a hub-aware waypoint list
+// and query OpenSky at the cargo destination (ICN) where we can observe arrival.
+
+// Known EMS transit hubs used by major postal regions.
+// When origin and destination are on different continents, cargo typically
+// transits through one of these hubs before the final leg.
+const EMS_HUB_ROUTES = [
+  { originRegion: ['IEV', 'KBP', 'WAW', 'RIX', 'VNO'], destRegion: ['ICN', 'GMP', 'SEL', 'KR'], hubs: ['WAW', 'FRA', 'AMS', 'LHR'] },
+  { originRegion: ['FRA', 'LHR', 'CDG', 'AMS', 'MUC', 'ZRH', 'VIE', 'BRU', 'MAD', 'FCO'], destRegion: ['ICN', 'GMP', 'SEL', 'KR'], hubs: ['FRA', 'AMS', 'HEL'] },
+  { originRegion: ['JFK', 'LAX', 'ORD', 'SFO', 'MIA', 'ATL', 'NYC'], destRegion: ['ICN', 'GMP', 'SEL', 'KR'], hubs: ['NRT', 'PVG'] },
+  { originRegion: ['NRT', 'HND', 'TYO', 'KIX', 'OSA', 'NGO'], destRegion: ['ICN', 'GMP', 'SEL', 'KR'], hubs: [] },
+  { originRegion: ['PVG', 'PEK', 'CAN', 'SHA', 'BJS', 'SZX', 'CTU'], destRegion: ['ICN', 'GMP', 'SEL', 'KR'], hubs: [] }
+];
+
+function resolveHubWaypoints(originCode, destCode) {
+  const oc = (originCode || '').toUpperCase();
+  const dc = (destCode || '').toUpperCase();
+  for (const rule of EMS_HUB_ROUTES) {
+    if (rule.originRegion.includes(oc) && rule.destRegion.includes(dc)) {
+      return rule.hubs;
+    }
+  }
+  return [];
+}
+
+async function detectPostalRoutingAndEnrich(rawTrackingData) {
+  const route = extractRouteFromPostalCodes(rawTrackingData);
+  if (!route) return { detected: false };
+
+  const { originCode, destCode, allCodes, rawCodes } = route;
+  const hubs = resolveHubWaypoints(originCode, destCode);
+
+  // The airport we actually query on OpenSky is the final cargo destination.
+  // For Korea-bound mail this is always ICN (RKSI).
+  const queryIata = destCode || allCodes[allCodes.length - 1];
+  const queryIcao = iataToIcao(queryIata);
+  if (!queryIcao) {
+    return { detected: true, originCode, destCode, hubs, rawCodes, openSkyEvents: [] };
+  }
+
+  const nowTs = Math.floor(Date.now() / 1000);
+  const beginTs = nowTs - OPENSKY_LOOKBACK_SECONDS;
+
+  let matchedFlights = [];
+  let openSkyEvents = [];
+  let openSkyError = null;
+
+  try {
+    if (isOpenSkyAuthenticated()) {
+      // Registered: arrivals API at destination (1 credit) – most accurate.
+      matchedFlights = await fetchOpenSkyArrivals(queryIcao, beginTs, nowTs);
+    } else {
+      // Anonymous: bounding-box query at destination airport (4 credits).
+      const nodeEntry = state.nodeMap.get(queryIata)
+        || state.nodeMap.get(queryIcao)
+        || HARD_CODED_NODE_FALLBACKS[queryIata];
+      if (nodeEntry) {
+        const d = 0.5; // ≈55 km radius
+        const svList = await fetchOpenSkyStatesByBbox(
+          nodeEntry.lat - d, nodeEntry.lon - d,
+          nodeEntry.lat + d, nodeEntry.lon + d
+        );
+        openSkyEvents = svList.map(stateVectorToObject).filter(Boolean);
+      }
+    }
+  } catch (err) {
+    console.warn('OpenSky enrichment failed:', err.message);
+    openSkyError = err.message;
+  }
+
+  // Build synthetic tracking events from OpenSky data
+  const syntheticEvents = [];
+
+  for (const sv of openSkyEvents) {
+    if (!sv || sv.lat == null || sv.lon == null) continue;
+    syntheticEvents.push({
+      alias: sv.callsign || sv.icao24,
+      countryCode: sv.originCountry || '',
+      locationName: sv.onGround
+        ? `착륙 확인 (${sv.callsign || sv.icao24})`
+        : `비행 중 (${sv.callsign || sv.icao24})`,
+      statusText: sv.onGround
+        ? `지상 확인 · ICAO24 ${sv.icao24}`
+        : `고도 ${sv.baroAltitudeM != null ? Math.round(sv.baroAltitudeM) + ' m' : '--'} · ${sv.velocityMs != null ? Math.round(sv.velocityMs * 3.6) + ' km/h' : '--'}`,
+      statusCode: sv.onGround ? 'OS_LANDED' : 'OS_AIRBORNE',
+      timestampToken: String(sv.lastContact || ''),
+      safetyStatus: 'OPENSKY',
+      displayTime: sv.lastContact ? new Date(sv.lastContact * 1000).toLocaleString() : '--',
+      timestampMs: sv.lastContact ? sv.lastContact * 1000 : null,
+      layer: 'air',
+      lat: sv.lat,
+      lon: sv.lon,
+      openSkyIcao24: sv.icao24,
+      raw: sv
+    });
+  }
+
+  for (const flight of matchedFlights) {
+    if (!flight) continue;
+    syntheticEvents.push({
+      alias: flight.callsign || flight.icao24,
+      countryCode: '',
+      locationName: `OpenSky 도착 기록 (${flight.callsign || flight.icao24})`,
+      statusText: [
+        flight.estDepartureAirport ? `출발: ${flight.estDepartureAirport}` : null,
+        flight.estArrivalAirport ? `도착: ${flight.estArrivalAirport}` : null
+      ].filter(Boolean).join(' → ') || 'OpenSky 운항 이력',
+      statusCode: 'OS_ARRIVAL',
+      timestampToken: String(flight.lastSeen || flight.firstSeen || ''),
+      safetyStatus: 'OPENSKY',
+      displayTime: flight.lastSeen ? new Date(flight.lastSeen * 1000).toLocaleString() : '--',
+      timestampMs: flight.lastSeen ? flight.lastSeen * 1000 : null,
+      layer: 'air',
+      lat: null,
+      lon: null,
+      openSkyIcao24: flight.icao24,
+      raw: flight
+    });
+  }
+
+  return {
+    detected: true,
+    rawCodes,
+    originCode,
+    destCode,
+    hubs,
+    queryIcao,
+    openSkyEvents: syntheticEvents,
+    openSkyError,
+    firstIcao24: openSkyEvents[0]?.openSkyIcao24 || matchedFlights[0]?.icao24 || null
+  };
+}
 
 const MALFORMED_JSON_REPAIR_MODULE_URL = 'https://cdn.jsdelivr.net/npm/jsonrepair@3.11.0/+esm';
 const CALENDAR_LIB_MODULE_URL = 'https://cdn.jsdelivr.net/npm/dayjs@1.11.13/+esm';
@@ -1783,7 +2246,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!progresses.length) {
           throw new Error('진행 이벤트가 비어 있습니다.');
         }
-        return { progresses, trackingData: data };
+        // ── Postal routing code detection: scan response for dispatch routing
+        // identifiers (e.g. UPU CARDIT/RESDIT). If found, query OpenSky for
+        // the cargo flight at the destination airport and merge the result.
+        // This is fully non-fatal: any error falls back to Korea Post events only.
+        let openSkyMeta = null;
+        try {
+          openSkyMeta = await detectPostalRoutingAndEnrich(data);
+        } catch (_) { /* non-fatal – continue without OpenSky */ }
+        return { progresses, trackingData: data, openSkyMeta };
       } catch (err) {
         attemptErrors.push(`${carrier.label}: ${err.message}`);
       }
@@ -1978,6 +2449,63 @@ document.addEventListener('DOMContentLoaded', () => {
         renderTrackingTimeline(trackingTimelineIntl, []);
         return;
       }
+
+      // ── OpenSky merge (non-fatal): if postal routing was detected and
+      // OpenSky returned supplementary flight events, append them and re-render.
+      // On any failure the original Korea Post timeline is preserved.
+      try {
+        const meta = trackingPayload?.openSkyMeta;
+        if (meta?.detected && Array.isArray(meta.openSkyEvents) && meta.openSkyEvents.length) {
+          const merged = [...events, ...meta.openSkyEvents]
+            .sort((a, b) => (a.timestampMs || 0) - (b.timestampMs || 0));
+          state.trackingEventsIntl = merged;
+          renderTrackingTimeline(trackingTimelineIntl, merged);
+
+          // Start adaptive polling if we identified a specific aircraft (ICAO24).
+          if (meta.firstIcao24) {
+            stopOpenSkyPolling();
+            startOpenSkyAdaptivePolling(meta.firstIcao24, (update) => {
+              if (update.type !== 'position' && update.type !== 'landed') return;
+              const sv = update.sv;
+              const posEvent = {
+                alias: sv.callsign || sv.icao24,
+                countryCode: sv.originCountry || '',
+                locationName: sv.onGround ? `착륙 확인 (${sv.callsign || sv.icao24})` : `비행 중 (${sv.callsign || sv.icao24})`,
+                statusText: sv.onGround
+                  ? `지상 확인 · ICAO24 ${sv.icao24}`
+                  : `고도 ${sv.baroAltitudeM != null ? Math.round(sv.baroAltitudeM) + ' m' : '--'} · ${sv.velocityMs != null ? Math.round(sv.velocityMs * 3.6) + ' km/h' : '--'}`,
+                statusCode: sv.onGround ? 'OS_LANDED' : 'OS_AIRBORNE',
+                timestampToken: String(sv.lastContact || ''),
+                safetyStatus: 'OPENSKY',
+                displayTime: sv.lastContact ? new Date(sv.lastContact * 1000).toLocaleString() : '--',
+                timestampMs: sv.lastContact ? sv.lastContact * 1000 : null,
+                layer: 'air', lat: sv.lat, lon: sv.lon,
+                openSkyIcao24: sv.icao24, raw: sv
+              };
+              const current = state.trackingEventsIntl;
+              upsertOpenSkyEvent(current, posEvent);
+              const sorted = current.slice().sort((a, b) => (a.timestampMs || 0) - (b.timestampMs || 0));
+              renderTrackingTimeline(trackingTimelineIntl, sorted);
+              if (update.type === 'landed') {
+                setTrackingStatus(trackingStatusIntl, `항공기 착륙 확인 (${sv.callsign || sv.icao24}) ✅`, 'success');
+              }
+            });
+          }
+
+          const hubNote = meta.hubs?.length ? ` 경유 ${meta.hubs.join('→')}` : '';
+          const routeNote = meta.originCode && meta.destCode
+            ? ` · 우편 EDI 경로 ${meta.originCode}→${meta.destCode}${hubNote}` : '';
+          const payload = buildTrackingPayload(merged);
+          if (trackingLogInputIntl) trackingLogInputIntl.value = payload;
+          await runTrackingAnalysisIntl(payload);
+          if (routeNote && trackingStatusIntl) {
+            trackingStatusIntl.textContent += routeNote;
+          }
+          return; // handled – skip the default path below
+        }
+      } catch (_) { /* OpenSky merge failed – fall through to normal render */ }
+
+      // ── Default path: Korea Post events only (original behaviour)
       renderTrackingTimeline(trackingTimelineIntl, events);
       const payload = buildTrackingPayload(events);
       if (trackingLogInputIntl) trackingLogInputIntl.value = payload;
@@ -2096,6 +2624,69 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         handleTrackingFetchIntl();
       }
+    });
+  }
+
+  // ── OpenSky Network settings (고급 설정 패널) ─────────────────────────
+  const openskyModeAnon = document.getElementById('opensky-mode-anon');
+  const openskyModeReg  = document.getElementById('opensky-mode-reg');
+  const openskyCredentials = document.getElementById('opensky-credentials');
+  const openskyUsername = document.getElementById('opensky-username');
+  const openskyPassword = document.getElementById('opensky-password');
+  const openskySaveBtn  = document.getElementById('opensky-save-btn');
+  const openskyBadge    = document.getElementById('opensky-badge');
+
+  function updateOpenSkyBadge() {
+    if (!openskyBadge) return;
+    if (isOpenSkyAuthenticated()) {
+      const { username } = getOpenSkyCredentials();
+      openskyBadge.textContent = `🔑 ${username} 계정 사용 중 · 4,000 크레딧/일`;
+      openskyBadge.className = 'opensky-badge registered';
+    } else {
+      openskyBadge.textContent = '🔓 비로그인 · 400 크레딧/일';
+      openskyBadge.className = 'opensky-badge anonymous';
+    }
+  }
+
+  // Restore saved credentials on page load
+  const savedCreds = getOpenSkyCredentials();
+  if (savedCreds.username && savedCreds.password) {
+    if (openskyModeReg) openskyModeReg.checked = true;
+    if (openskyCredentials) openskyCredentials.classList.remove('hidden');
+    if (openskyUsername) openskyUsername.value = savedCreds.username;
+    if (openskyPassword) openskyPassword.value = savedCreds.password;
+  } else if (openskyModeAnon) {
+    openskyModeAnon.checked = true;
+  }
+  updateOpenSkyBadge();
+
+  if (openskyModeAnon) {
+    openskyModeAnon.addEventListener('change', () => {
+      if (openskyCredentials) openskyCredentials.classList.add('hidden');
+    });
+  }
+  if (openskyModeReg) {
+    openskyModeReg.addEventListener('change', () => {
+      if (openskyCredentials) openskyCredentials.classList.remove('hidden');
+      if (openskyUsername) openskyUsername.focus();
+    });
+  }
+  if (openskySaveBtn) {
+    openskySaveBtn.addEventListener('click', () => {
+      if (openskyModeReg?.checked) {
+        const u = (openskyUsername?.value || '').trim();
+        const p = openskyPassword?.value || '';
+        if (u && p) {
+          saveOpenSkyCredentials(u, p);
+        } else {
+          clearOpenSkyCredentials();
+        }
+      } else {
+        clearOpenSkyCredentials();
+        if (openskyUsername) openskyUsername.value = '';
+        if (openskyPassword) openskyPassword.value = '';
+      }
+      updateOpenSkyBadge();
     });
   }
 

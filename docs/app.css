@@ -815,3 +815,116 @@ button.ghost:hover {
 .beta-placeholder {
     margin-top: 1.5rem;
 }
+
+/* ── Advanced Settings (고급 설정) ────────────────────────────────────── */
+.advanced-settings {
+    border: 1px solid var(--card-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.advanced-settings summary {
+    cursor: pointer;
+    padding: 0.7rem 1rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--muted);
+    background: var(--surface, #f8f8f8);
+    user-select: none;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.advanced-settings summary::-webkit-details-marker { display: none; }
+.advanced-settings summary::before {
+    content: '▶';
+    font-size: 0.7rem;
+    transition: transform 0.2s;
+    display: inline-block;
+}
+.advanced-settings[open] summary::before {
+    transform: rotate(90deg);
+}
+.advanced-settings summary:hover {
+    color: var(--text);
+}
+
+.advanced-settings-body {
+    padding: 1rem 1.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.adv-section h3 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 0 0 0.4rem;
+}
+
+.adv-section > p {
+    font-size: 0.875rem;
+    color: var(--muted);
+    margin: 0 0 0.75rem;
+    line-height: 1.5;
+}
+
+.adv-note {
+    background: #fffbea;
+    border-left: 3px solid #f59e0b;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0 4px 4px 0;
+    font-size: 0.83rem !important;
+    color: #78350f !important;
+}
+
+.opensky-mode-select {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.radio-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    font-size: 0.88rem;
+    cursor: pointer;
+    line-height: 1.4;
+}
+.radio-label input[type="radio"] {
+    margin-top: 0.15rem;
+    flex-shrink: 0;
+}
+
+.opensky-credentials {
+    margin-bottom: 0.75rem;
+}
+.opensky-credentials.hidden {
+    display: none;
+}
+
+.adv-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.opensky-badge {
+    font-size: 0.82rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: 999px;
+    font-weight: 600;
+    line-height: 1;
+}
+.opensky-badge.anonymous {
+    background: #f1f5f9;
+    color: #64748b;
+}
+.opensky-badge.registered {
+    background: #dcfce7;
+    color: #166534;
+}

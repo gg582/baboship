@@ -88,6 +88,44 @@
                         <div class="tracking-status" id="tracking-status">송장번호를 입력하거나 이벤트 문자열을 붙여넣으세요.</div>
                     </div>
                 </div>
+
+                <details class="advanced-settings" id="advanced-settings">
+                    <summary>⚙️ 고급 설정</summary>
+                    <div class="advanced-settings-body">
+                        <section class="adv-section">
+                            <h3>🛰️ OpenSky Network 항공 신호 추적</h3>
+                            <p>우체국 API 응답에서 우편 EDI 라우팅 코드(예: <code>UAIEVCKRSELBAUX60062</code>)가 감지되면, 코드에 포함된 공항 정보를 파싱해 실제 화물 항공기를 OpenSky Network에서 조회하고 추적 이력에 병합합니다.</p>
+                            <p class="adv-note">⚠️ 우편 EDI 라우팅 코드는 <strong>SITA 주소가 아닙니다</strong>. 직항 경로가 아닌 경우도 많으며(예: 키이브→인천 실제 경로: 바르샤바/리가/프랑크푸르트 경유), OpenSky는 보조 참고 데이터로만 활용됩니다. 실제 배송 추적은 UPU S10 송장번호가 기준입니다.</p>
+                            <div class="opensky-mode-select" role="group" aria-label="OpenSky 접속 모드">
+                                <label class="radio-label">
+                                    <input type="radio" name="opensky-mode" value="anonymous" id="opensky-mode-anon" checked>
+                                    <span><strong>비로그인 (익명)</strong> — 하루 400 크레딧 · 5분 간격 · 현재 상태만</span>
+                                </label>
+                                <label class="radio-label">
+                                    <input type="radio" name="opensky-mode" value="registered" id="opensky-mode-reg">
+                                    <span><strong>계정 사용</strong> — 하루 4,000 크레딧 · 30초 간격 · 1시간 이력 조회</span>
+                                </label>
+                            </div>
+                            <div class="opensky-credentials hidden" id="opensky-credentials">
+                                <p class="adv-note">⚠️ 비밀번호가 브라우저 로컬스토리지에 <strong>암호화 없이</strong> 저장됩니다. 반드시 OpenSky 전용 계정을 사용하고 주 비밀번호를 입력하지 마세요.</p>
+                                <div class="form-grid">
+                                    <label>
+                                        <span>OpenSky 아이디</span>
+                                        <input type="text" id="opensky-username" placeholder="opensky-network.org 가입 아이디" autocomplete="username">
+                                    </label>
+                                    <label>
+                                        <span>비밀번호</span>
+                                        <input type="password" id="opensky-password" placeholder="••••••••" autocomplete="current-password">
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="adv-actions">
+                                <button type="button" id="opensky-save-btn">설정 저장</button>
+                                <span class="opensky-badge anonymous" id="opensky-badge">🔓 비로그인 · 400 크레딧/일</span>
+                            </div>
+                        </section>
+                    </div>
+                </details>
                 <div class="tracking-metrics" id="tracking-metrics">
                     <div class="empty-state">분석 결과가 여기에 표시됩니다.</div>
                 </div>
