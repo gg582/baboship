@@ -1,0 +1,10 @@
+[submodule "lib/cwist"]
+	path = lib/cwist
+	url = https://github.com/gg582/cwist
+	branch = main
+
+[submodule "lib/libttak"]
+	path = lib/libttak
+	url = https://github.com/religiya-serdtsa/libttak
+	branch = main
+
