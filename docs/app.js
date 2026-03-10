@@ -967,7 +967,18 @@ const UPU_S10_SERVICE_CLASSES = [
 ];
 
 // Single combined regex for departure/in-transit milestones (fast O(n) scan).
-const DEPARTURE_RE = /출국|출발|항공기.*적재|적재.*항공기|in.?transit|departed|dispatch|발송완료|발송됨|통관.*통과|아웃바운드|항공.*탑재|탑재.*완료/i;
+// Pattern groups:
+//   Korean outbound terms: 출국 (departure), 출발 (departure)
+//   Korean loading terms:  항공기.*적재 / 적재.*항공기 (aircraft loading), 항공.*탑재 / 탑재.*완료
+//   Korean customs/transit: 통관.*통과 (customs clearance), 아웃바운드 (outbound)
+//   Korean dispatch terms:
+//     발송완료 (dispatch complete), 발송됨 (was dispatched)
+//     발송(?!교환국|준비): plain "발송" (post-customs dispatch, treated as 입항-통관 후 발송)
+//       per problem spec: 교환국 도착-발송 케이스 = 입항-통관 후 발송
+//       Negative lookahead excludes "발송교환국에도착" (arrival at origin exchange, NOT departure)
+//       and "발송준비" (dispatch preparation, NOT yet departed)
+//   English terms:         in.?transit, departed, dispatch (for English-language courier APIs)
+const DEPARTURE_RE = /출국|출발|항공기.*적재|적재.*항공기|in.?transit|departed|dispatch|발송완료|발송됨|발송(?!교환국|준비)|통관.*통과|아웃바운드|항공.*탑재|탑재.*완료/i;
 function clampNumber(value, min, max) {
   const num = Number(value);
   if (Number.isNaN(num)) return min;
