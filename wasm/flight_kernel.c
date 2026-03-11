@@ -376,8 +376,11 @@ FK_EXPORT const char *fk_generate_candidates(const char *origin_iata,
     /* Serialise to JSON — guard against buffer overflow at each step */
     int pos = 0;
 #define FK_APPEND(...) do { \
-        int _n = snprintf(buf + pos, sizeof(buf) - (size_t)pos, __VA_ARGS__); \
-        if (_n > 0) pos += _n; \
+        if ((size_t)pos < sizeof(buf) - 1) { \
+            int _n = snprintf(buf + pos, sizeof(buf) - (size_t)pos, __VA_ARGS__); \
+            if (_n > 0) pos += _n; \
+            if ((size_t)pos >= sizeof(buf)) pos = (int)(sizeof(buf) - 1); \
+        } \
     } while (0)
 
     FK_APPEND("[");
@@ -520,17 +523,25 @@ FK_EXPORT const char *fk_compute_eta_distribution(const char *candidates_json) {
     if (confidence < 0.1) confidence = 0.1;
 
     int pos = 0;
-    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
+#define FK_ETA_APPEND(...) do { \
+        if ((size_t)pos < sizeof(buf) - 1) { \
+            int _n = snprintf(buf + pos, sizeof(buf) - (size_t)pos, __VA_ARGS__); \
+            if (_n > 0) pos += _n; \
+            if ((size_t)pos >= sizeof(buf)) pos = (int)(sizeof(buf) - 1); \
+        } \
+    } while (0)
+
+    FK_ETA_APPEND(
         "{\"lowerHours\":%.1f,\"modeHours\":%.1f,\"upperHours\":%.1f,"
         "\"confidence\":%.3f,\"candidates\":[",
         lower_hours, mode_hours, upper_hours, confidence);
 
     for (int i = 0; i < cand_count; i++) {
-        if (i > 0) pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, ",");
-        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
-            "{\"totalHours\":%.1f,\"score\":%.1f}",
+        FK_ETA_APPEND(i > 0 ? ",{\"totalHours\":%.1f,\"score\":%.1f}"
+                             :  "{\"totalHours\":%.1f,\"score\":%.1f}",
             cand_hours[i], cand_scores[i]);
     }
-    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "]}");
+    FK_ETA_APPEND("]}");
+#undef FK_ETA_APPEND
     return buf;
 }
