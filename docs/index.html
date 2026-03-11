@@ -292,7 +292,23 @@
                     </div>
                 </div>
                 <div class="tracking-body-actions">
-                    <div class="tracking-status" id="estimator-status">출발지와 도착지 IATA 코드를 입력하고 버튼을 누르세요.</div>
+                    <div class="tracking-status" id="estimator-status">출발지와 도착지 IATA 코드를 입력하거나 지도에서 공항을 선택하세요.</div>
+                </div>
+
+                <div class="estimator-map-section">
+                    <div class="map-mode" id="estimator-map-mode">
+                        <button type="button" class="active" data-estimator-field="origin">출발 공항 지정</button>
+                        <button type="button" data-estimator-field="dest">도착 공항 지정</button>
+                    </div>
+                    <div id="estimator-map-wrapper">
+                        <div id="estimator-map"></div>
+                        <div id="estimator-map-loader">공항 데이터를 불러오는 중...</div>
+                    </div>
+                    <div class="selection-panel">
+                        <div class="selection-pill">출발: <strong id="estimator-selection-origin">--</strong></div>
+                        <div class="selection-pill">도착: <strong id="estimator-selection-dest">--</strong></div>
+                    </div>
+                    <div class="map-status" id="estimator-map-status">지도에서 공항을 클릭해 출발지/도착지를 지정하거나, 위 입력란에 직접 IATA 코드를 입력하세요.</div>
                 </div>
 
                 <div class="estimator-results" id="estimator-results">
