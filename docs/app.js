@@ -1722,7 +1722,7 @@ document.addEventListener('DOMContentLoaded', () => {
       hours += /완료/.test(text) ? 12 : 48;
     }
     if (/배달준비|배송준비|집배준비/.test(text)) {
-      hours += 6;
+      hours += 2; // 지역 동 우체국 인계 완료 상태이므로 처리 대기 시간이 짧음
     }
     if (/배달중/.test(text)) {
       hours += 3;
@@ -1756,8 +1756,9 @@ document.addEventListener('DOMContentLoaded', () => {
     return 72;
   }
 
-  function computeEtaConfidence(eventCount, remainingDistance, preDeparture = false) {
+  function computeEtaConfidence(eventCount, remainingDistance, preDeparture = false, lastEvent = null) {
     if (preDeparture) return '낮음';
+    if (lastEvent && /배달준비|배송준비|집배준비/.test((lastEvent.statusText || '').toLowerCase())) return '높음';
     if (eventCount >= 5 && remainingDistance < 500) return '높음';
     if (eventCount >= 3 && remainingDistance < 3500) return '중간';
     return '낮음';
@@ -1944,7 +1945,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const remainingTravelHours = remainingDistance > 5 ? (remainingDistance / speed) : 0;
     const processingHours = computePendingProcessingHours(lastEvent);
     const destinationCustomsHours = computePendingDestinationCustomsHours(events, lastEvent, destination.iso);
-    const lastMileHours = determineLastMileHours(destination.iso, lastEvent.countryCode);
+    let lastMileHours = determineLastMileHours(destination.iso, lastEvent.countryCode);
+    const isLocalPostOfficeHandover = /배달준비|배송준비|집배준비/.test((lastEvent.statusText || '').toLowerCase());
+    if (isLocalPostOfficeHandover) {
+      // 지역 동 우체국 인계 완료 – 남은 라스트마일 시간을 단축
+      lastMileHours = Math.min(lastMileHours, 4);
+    }
     const destIso = (destination.iso || effectiveUserIso || DEFAULT_DESTINATION_ISO).toUpperCase();
 
     // Travel + origin-exchange-office processing are continuous (24/7)
@@ -2028,7 +2034,7 @@ document.addEventListener('DOMContentLoaded', () => {
       destinationCustomsHours,
       lastMileHours,
       destIso,
-      confidence: computeEtaConfidence(sorted.length, remainingDistance, preDeparture),
+      confidence: computeEtaConfidence(sorted.length, remainingDistance, preDeparture, lastEvent),
       reason: buildEtaReason({
         remainingDistance,
         mode: futureMode,
