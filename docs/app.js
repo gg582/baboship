@@ -1338,6 +1338,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const trackingFetchBtnDomestic = document.getElementById('tracking-fetch-btn-domestic');
   const trackingDestinationSelect = document.getElementById('tracking-destination-iso');
   const maritimePanel = document.getElementById('maritime-panel');
+  const estimatorPanel = document.getElementById('estimator-panel');
 
   // --- MapLibre GL JS Integration ---
   function initMap(containerId, isModal = false) {
@@ -1546,6 +1547,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (manualPanel) manualPanel.classList.toggle('hidden', mode !== 'manual');
     if (trackingPanel) trackingPanel.classList.toggle('hidden', mode !== 'tracking');
     if (maritimePanel) maritimePanel.classList.toggle('hidden', mode !== 'maritime');
+    if (estimatorPanel) estimatorPanel.classList.toggle('hidden', mode !== 'estimator');
     
     // Trigger map resize when panel becomes visible
     if (mainMapLibre) mainMapLibre.resize();
@@ -2717,7 +2719,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (mainMapLibre) mainMapLibre.resize();
     if (modalMapLibre) modalMapLibre.resize();
   });
-  
+
+  /* Initialise the parcel estimator tab (independent pipeline) */
+  import('./ui/parcel_estimator_tab.js').then(({ initEstimatorTab }) => {
+    initEstimatorTab(runRouteSearch).catch(err => console.warn('[estimator init]', err));
+  }).catch(err => console.warn('[estimator module load]', err));
+
   // Call init() last
   init();
 
