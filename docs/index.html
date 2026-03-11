@@ -26,6 +26,7 @@
                 <button type="button" class="mode-tab active" data-mode-tab="tracking" role="tab" aria-controls="tracking-panel" aria-selected="true">EMS 경로 효율</button>
                 <button type="button" class="mode-tab" data-mode-tab="manual" role="tab" aria-controls="manual-panel" aria-selected="false">수동으로 공항 선택</button>
                 <button type="button" class="mode-tab mode-tab-beta" data-mode-tab="maritime" role="tab" aria-controls="maritime-panel" aria-selected="false" title="해운 경로는 실험적 기능입니다. 데이터 정확도가 항공 데이터보다 낮을 수 있습니다.">해운 경로 <span class="beta-badge">베타</span></button>
+                <button type="button" class="mode-tab mode-tab-beta" data-mode-tab="estimator" role="tab" aria-controls="estimator-panel" aria-selected="false" title="항공 신호 데이터를 이용한 확률적 소포 이동 경로 추정">소포 행방 추정 <span class="beta-badge">베타</span></button>
             </div>
         </header>
 
@@ -267,6 +268,59 @@
                 </div>
                 <div class="beta-placeholder">
                     <div class="empty-state">🚢 해운 경로 기능이 곧 추가될 예정입니다.<br>현재 데이터베이스에는 항공 노선만 포함되어 있습니다.<br><code>generate_all.sh --with-maritime</code>을 실행해 해운 데이터를 활성화하세요.</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel hidden estimator-panel" id="estimator-panel" data-panel="estimator">
+            <div class="card estimator-card">
+                <div class="tracking-header">
+                    <div>
+                        <h2>소포 행방 추정 <span class="beta-badge">베타</span></h2>
+                        <p>출발지와 도착지 공항 코드를 입력하면 항공 신호 데이터를 이용해 가능한 화물 운송 경로와 확률적 도착 시간을 추정합니다. 기존 추적 시스템과 독립적으로 동작하는 추정 엔진입니다.</p>
+                    </div>
+                    <div class="tracking-actions">
+                        <label>
+                            <span>출발 공항 (IATA)</span>
+                            <input type="text" id="estimator-origin" maxlength="3" placeholder="예: ICN" autocomplete="off">
+                        </label>
+                        <label>
+                            <span>도착 공항 (IATA)</span>
+                            <input type="text" id="estimator-dest" maxlength="3" placeholder="예: FRA" autocomplete="off">
+                        </label>
+                        <button type="button" id="estimator-run-btn">행방 추정 시작</button>
+                    </div>
+                </div>
+                <div class="tracking-body-actions">
+                    <div class="tracking-status" id="estimator-status">출발지와 도착지 IATA 코드를 입력하고 버튼을 누르세요.</div>
+                </div>
+
+                <div class="estimator-results" id="estimator-results">
+                    <section class="estimator-section" id="estimator-arrival-section">
+                        <h3>예상 도착 시간 창</h3>
+                        <div id="estimator-arrival-window">
+                            <div class="empty-state">추정 결과가 여기에 표시됩니다.</div>
+                        </div>
+                    </section>
+
+                    <section class="estimator-section" id="estimator-chart-section">
+                        <h3>확률 분포 그래프</h3>
+                        <canvas id="estimator-chart" width="720" height="200" style="width:100%;height:200px;border-radius:6px;"></canvas>
+                    </section>
+
+                    <section class="estimator-section" id="estimator-breakdown-section">
+                        <h3>지연 단계별 분석</h3>
+                        <div id="estimator-breakdown">
+                            <div class="empty-state">추정 후 단계별 분석이 표시됩니다.</div>
+                        </div>
+                    </section>
+
+                    <section class="estimator-section" id="estimator-candidates-section">
+                        <h3>상위 10개 후보 경로</h3>
+                        <div id="estimator-candidates">
+                            <div class="empty-state">추정 후 후보 경로가 표시됩니다.</div>
+                        </div>
+                    </section>
                 </div>
             </div>
         </section>
