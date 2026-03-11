@@ -939,6 +939,40 @@ button.ghost:hover {
   gap: 1.25rem;
 }
 
+/* Map section inside the estimator tab */
+.estimator-map-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+#estimator-map-wrapper {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--card-border);
+  min-height: 360px;
+  background: #eef1f7;
+  width: 100%;
+}
+
+#estimator-map {
+  width: 100%;
+  height: 360px;
+}
+
+#estimator-map-loader {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(245, 246, 248, 0.92);
+  z-index: 10;
+  pointer-events: none;
+}
+
 .estimator-results {
   display: flex;
   flex-direction: column;

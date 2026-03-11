@@ -1340,6 +1340,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const maritimePanel = document.getElementById('maritime-panel');
   const estimatorPanel = document.getElementById('estimator-panel');
 
+  let estimatorTab = null; // API returned by initEstimatorTab
+
   // --- MapLibre GL JS Integration ---
   function initMap(containerId, isModal = false) {
     const map = new maplibregl.Map({
@@ -1529,6 +1531,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (mapModal.classList.contains('open')) {
         updateMapNodes(modalMapLibre);
       }
+      if (estimatorTab) estimatorTab.setNodes(state.nodeMap);
       
       loader.style.display = 'none';
     } catch (err) {
@@ -1552,6 +1555,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Trigger map resize when panel becomes visible
     if (mainMapLibre) mainMapLibre.resize();
     if (modalMapLibre && mapModal.classList.contains('open')) modalMapLibre.resize();
+    if (mode === 'estimator' && estimatorTab) estimatorTab.resize();
   }
 
   function setTrackingStatus(element, message, variant = 'info') {
@@ -2127,19 +2131,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const domesticPattern = /^\d{13}$/;
     if (intlPattern.test(normalized)) {
       const serviceInfo = classifyUPUS10ServiceClass(normalized);
-      // 국제우편은 우체국 EMS 엔드포인트를 우선으로 통일해 404 가능성을 낮춘다.
-      pushUnique('kr.epost.ems', 'Korea Post EMS');
       if (serviceInfo?.serviceClass === 'letter_tracked') {
-        // Letter 계열은 일반 우체국 API를 보조 후보로 둔다.
+        // 추적 서신(LA-LZ)은 EMS 전용 엔드포인트가 발송지 이벤트만 반환할 수 있으므로
+        // 일반 우체국 API를 먼저 시도해 전체 추적 이력을 가져온다.
         pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
-      } else if (serviceInfo?.serviceClass === 'parcel') {
-        // 소포 계열은(EMS 우선 전제) 일반 우체국 API를 보조 후보로 둔다.
-        pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
-      } else if (serviceInfo?.serviceClass === 'registered') {
-        pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
+        pushUnique('kr.epost.ems', 'Korea Post EMS');
       } else {
-        pushUnique('kr.epost', 'Korea Post');
-        pushUnique('un.upu.ems', 'UPU EMS (fallback)');
+        // 그 외 국제우편은 우체국 EMS 엔드포인트를 우선으로 통일해 404 가능성을 낮춘다.
+        pushUnique('kr.epost.ems', 'Korea Post EMS');
+        if (serviceInfo?.serviceClass === 'parcel') {
+          // 소포 계열은(EMS 우선 전제) 일반 우체국 API를 보조 후보로 둔다.
+          pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
+        } else if (serviceInfo?.serviceClass === 'registered') {
+          pushUnique('kr.epost', `Korea Post (${serviceInfo.label})`);
+        } else {
+          pushUnique('kr.epost', 'Korea Post');
+          pushUnique('un.upu.ems', 'UPU EMS (fallback)');
+        }
       }
     } else if (domesticPattern.test(normalized) || normalized.startsWith('KR')) {
       pushUnique('kr.epost', 'Korea Post');
@@ -2722,7 +2730,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   /* Initialise the parcel estimator tab (independent pipeline) */
   import('./ui/parcel_estimator_tab.js').then(({ initEstimatorTab }) => {
-    initEstimatorTab(runRouteSearch).catch(err => console.warn('[estimator init]', err));
+    initEstimatorTab(runRouteSearch, { getNodeMap: () => state.nodeMap })
+      .then(api => {
+        estimatorTab = api;
+        // If nodes were already loaded before the estimator was ready, sync now.
+        if (state.nodeMap.size > 0) api.setNodes(state.nodeMap);
+      })
+      .catch(err => console.warn('[estimator init]', err));
   }).catch(err => console.warn('[estimator module load]', err));
 
   // Call init() last

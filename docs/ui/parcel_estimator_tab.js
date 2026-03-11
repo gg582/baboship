@@ -4,11 +4,12 @@
  * This module is self-contained and does not modify any existing tracking
  * pipeline.  It communicates with the rest of the app only through:
  *   - a `runRouteSearch` function passed in at init time (existing black-box)
+ *   - an optional `getNodeMap` callback for map node data
  *   - standard DOM APIs for rendering within #estimator-panel
  *
  * Pipeline:
- *   [User input] → FlightKernel → CandidateRoutes → InputAdapter
- *               → ResultAggregator → Visualisation
+ *   [User input / Map click] → FlightKernel → CandidateRoutes → InputAdapter
+ *               → ResultAggregator → Visualisation (table + map)
  */
 
 import createFlightKernel from '../wasm/flight_kernel.js';
@@ -20,6 +21,12 @@ import { aggregateResults, formatHours, arrivalDateString } from '../estimator/r
 let _kernel     = null;   /* flight kernel instance */
 let _runSearch  = null;   /* injected black-box route search function */
 let _running    = false;
+let _getNodeMap = null;   /* callback → Map<code, node> */
+
+/* ---- estimator map state ---- */
+let _estimatorMap         = null;
+let _estimatorActiveField = 'origin'; /* 'origin' | 'dest' */
+const _estimatorSelection = { origin: null, dest: null };
 
 /* ---- DOM helpers ---- */
 function $(id) { return document.getElementById(id); }
@@ -30,6 +37,238 @@ function setStatus(msg, variant = 'info') {
   el.textContent = msg;
   el.className   = 'tracking-status' + (variant !== 'info' ? ` ${variant}` : '');
 }
+
+/* ================================================================
+   Estimator MapLibre map
+   ================================================================ */
+
+function _initEstimatorMap() {
+  if (typeof maplibregl === 'undefined') return;
+  const mapEl = $('estimator-map');
+  if (!mapEl) return;
+
+  const map = new maplibregl.Map({
+    container: 'estimator-map',
+    style: {
+      version: 8,
+      sources: {
+        osm: {
+          type: 'raster',
+          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          attribution: '© OpenStreetMap contributors'
+        }
+      },
+      layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
+    },
+    center: [0, 0],
+    zoom: 1
+  });
+
+  map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+  map.on('load', () => {
+    /* Node source — promoteId lets us use the 'code' string as feature ID */
+    map.addSource('est-nodes', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] },
+      promoteId: 'code'
+    });
+    /* Route line source for the estimated path */
+    map.addSource('est-route', {
+      type: 'geojson',
+      data: { type: 'FeatureCollection', features: [] }
+    });
+
+    /* Route line */
+    map.addLayer({
+      id: 'est-route-line',
+      type: 'line',
+      source: 'est-route',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': '#e8661b',
+        'line-width': 2.5,
+        'line-opacity': 0.75,
+        'line-dasharray': [3, 2]
+      }
+    });
+
+    /* Airport circles */
+    map.addLayer({
+      id: 'est-nodes-circle',
+      type: 'circle',
+      source: 'est-nodes',
+      paint: {
+        'circle-color': [
+          'case',
+          ['boolean', ['feature-state', 'selected'], false], '#e8661b',
+          ['match', ['get', 'layer'], 'sea', '#66BB6A', '#3399FF']
+        ],
+        'circle-radius': [
+          'case',
+          ['boolean', ['feature-state', 'selected'], false], 8,
+          4
+        ],
+        'circle-stroke-color': '#fff',
+        'circle-stroke-width': 1
+      }
+    });
+
+    /* Airport labels */
+    map.addLayer({
+      id: 'est-nodes-symbol',
+      type: 'symbol',
+      source: 'est-nodes',
+      layout: {
+        'text-field': ['get', 'code'],
+        'text-font': ['IBM Plex Sans KR Medium', 'Arial Unicode MS Regular'],
+        'text-size': 10,
+        'text-offset': [0, 1],
+        'text-anchor': 'top'
+      },
+      paint: {
+        'text-color': '#fff',
+        'text-halo-color': '#000',
+        'text-halo-width': 1
+      }
+    });
+
+    /* Click → set field */
+    map.on('click', 'est-nodes-circle', (e) => {
+      if (!e.features.length) return;
+      _setEstimatorField(_estimatorActiveField, e.features[0].properties.code);
+    });
+    map.on('mouseenter', 'est-nodes-circle', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'est-nodes-circle', () => { map.getCanvas().style.cursor = ''; });
+
+    /* Initial node load */
+    const nodeMap = _getNodeMap ? _getNodeMap() : null;
+    if (nodeMap && nodeMap.size > 0) _updateEstimatorMapNodes(nodeMap);
+
+    const loader = $('estimator-map-loader');
+    if (loader) loader.style.display = 'none';
+  });
+
+  _estimatorMap = map;
+}
+
+function _updateEstimatorMapNodes(nodeMap) {
+  if (!_estimatorMap || !_estimatorMap.getSource('est-nodes')) return;
+  if (!nodeMap || !nodeMap.size) return;
+
+  const features = [];
+  for (const [, node] of nodeMap) {
+    features.push({
+      type: 'Feature',
+      properties: { code: node.code, name: node.name || '', layer: node.layer || 'air' },
+      geometry: { type: 'Point', coordinates: [node.lon, node.lat] }
+    });
+  }
+  _estimatorMap.getSource('est-nodes').setData({ type: 'FeatureCollection', features });
+
+  /* Re-apply selection highlights after data refresh */
+  for (const field of ['origin', 'dest']) {
+    if (_estimatorSelection[field]) {
+      _estimatorMap.setFeatureState(
+        { source: 'est-nodes', id: _estimatorSelection[field] },
+        { selected: true }
+      );
+    }
+  }
+
+  const loader = $('estimator-map-loader');
+  if (loader) loader.style.display = 'none';
+}
+
+function _setEstimatorField(field, code) {
+  /* Clear previous highlight for this field only */
+  if (_estimatorSelection[field] && _estimatorMap) {
+    _estimatorMap.setFeatureState(
+      { source: 'est-nodes', id: _estimatorSelection[field] },
+      { selected: false }
+    );
+  }
+
+  _estimatorSelection[field] = code || null;
+
+  const inputEl = $(field === 'origin' ? 'estimator-origin' : 'estimator-dest');
+  const selEl   = $(field === 'origin' ? 'estimator-selection-origin' : 'estimator-selection-dest');
+  if (inputEl) inputEl.value = code || '';
+  if (selEl)   selEl.textContent = code || '--';
+
+  if (code && _estimatorMap) {
+    _estimatorMap.setFeatureState(
+      { source: 'est-nodes', id: code },
+      { selected: true }
+    );
+  }
+
+  /* Auto-switch active field to the other slot once one is filled */
+  const other = field === 'origin' ? 'dest' : 'origin';
+  if (!_estimatorSelection[other]) {
+    _estimatorActiveField = other;
+    document.querySelectorAll('[data-estimator-field]').forEach(b => {
+      b.classList.toggle('active', b.dataset.estimatorField === other);
+    });
+  }
+}
+
+function _syncInputToMap(field, code) {
+  if (!_estimatorMap) return;
+  const nodeMap = _getNodeMap ? _getNodeMap() : null;
+  if (!nodeMap || !nodeMap.has(code)) return;
+
+  /* Clear previous highlight for this field only */
+  if (_estimatorSelection[field] && _estimatorSelection[field] !== code) {
+    _estimatorMap.setFeatureState(
+      { source: 'est-nodes', id: _estimatorSelection[field] },
+      { selected: false }
+    );
+  }
+  _estimatorSelection[field] = code;
+
+  const selEl = $(field === 'origin' ? 'estimator-selection-origin' : 'estimator-selection-dest');
+  if (selEl) selEl.textContent = code;
+
+  _estimatorMap.setFeatureState(
+    { source: 'est-nodes', id: code },
+    { selected: true }
+  );
+}
+
+function _drawEstimatedRoute(candidates) {
+  if (!_estimatorMap || !_estimatorMap.getSource('est-route')) return;
+  const nodeMap = _getNodeMap ? _getNodeMap() : null;
+  if (!nodeMap || !candidates || !candidates.length) return;
+
+  const best = candidates[0];
+  if (!best || !best.route) return;
+
+  const codes  = best.route.split(' → ').map(s => s.trim());
+  const coords = codes.map(c => nodeMap.get(c)).filter(Boolean).map(n => [n.lon, n.lat]);
+  if (coords.length < 2) return;
+
+  _estimatorMap.getSource('est-route').setData({
+    type: 'FeatureCollection',
+    features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: coords } }]
+  });
+
+  /* Fit view to the estimated route */
+  try {
+    const bounds = coords.reduce(
+      (b, c) => b.extend(c),
+      new maplibregl.LngLatBounds(coords[0], coords[0])
+    );
+    _estimatorMap.fitBounds(bounds, { padding: 60, maxZoom: 8, duration: 800 });
+  } catch {
+    /* fitBounds can fail if bounds are degenerate; silently ignore */
+  }
+}
+
+/* ================================================================
+   Chart / breakdown / table renderers (unchanged from original)
+   ================================================================ */
 
 /** Draw a simple probability-distribution bar chart onto a <canvas>. */
 function drawDistributionChart(canvas, distribution) {
@@ -257,6 +496,9 @@ function renderResult(distribution) {
 
   /* Candidate table */
   renderCandidateTable(table, distribution.candidates);
+
+  /* Draw best route on the estimator map */
+  _drawEstimatedRoute(distribution.candidates);
 }
 
 /* ---- public API ---- */
@@ -265,30 +507,74 @@ function renderResult(distribution) {
  * Initialise the estimator tab.
  *
  * @param {Function} runRouteSearch  the existing runRouteSearch black-box function
+ * @param {Object}   [options]
+ * @param {Function} [options.getNodeMap]  () => Map<string, node> — live node map callback
+ * @returns {Promise<{ resize: Function, setNodes: Function }>}
  */
-export async function initEstimatorTab(runRouteSearch) {
-  _runSearch = runRouteSearch;
+export async function initEstimatorTab(runRouteSearch, options = {}) {
+  _runSearch  = runRouteSearch;
+  _getNodeMap = options.getNodeMap || null;
+
+  /* ── Map ── */
+  _initEstimatorMap();
+
+  /* ── Map mode buttons ── */
+  document.querySelectorAll('[data-estimator-field]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-estimator-field]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      _estimatorActiveField = btn.dataset.estimatorField;
+    });
+  });
+
+  /* ── Sync text inputs → map highlights ── */
+  const originEl = $('estimator-origin');
+  const destEl   = $('estimator-dest');
+  if (originEl) {
+    originEl.addEventListener('input', () => {
+      const code = originEl.value.trim().toUpperCase();
+      if (code.length === 3) _syncInputToMap('origin', code);
+    });
+  }
+  if (destEl) {
+    destEl.addEventListener('input', () => {
+      const code = destEl.value.trim().toUpperCase();
+      if (code.length === 3) _syncInputToMap('dest', code);
+    });
+  }
+
+  /* ── Flight kernel ── */
   try {
     const k = await createFlightKernel();
     k.fkInit();
     _kernel = k;
-    setStatus('비행 커널 준비 완료. 출발지와 도착지를 입력하세요.');
+    setStatus('비행 커널 준비 완료. 출발지와 도착지를 입력하거나 지도에서 선택하세요.');
   } catch (err) {
     setStatus('비행 커널 초기화 실패: ' + err.message, 'error');
   }
 
+  /* ── Button / keyboard handlers ── */
   const btn = $('estimator-run-btn');
   if (btn) btn.addEventListener('click', () => runEstimation().catch(console.error));
 
-  const originInput = $('estimator-origin');
-  const destInput   = $('estimator-dest');
-  if (originInput && destInput) {
-    [originInput, destInput].forEach(el => {
-      el.addEventListener('keydown', e => {
-        if (e.key === 'Enter') runEstimation().catch(console.error);
-      });
+  [originEl, destEl].filter(Boolean).forEach(el => {
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter') runEstimation().catch(console.error);
     });
-  }
+  });
+
+  /* ── Return API for app.js to call ── */
+  return {
+    resize:   () => { if (_estimatorMap) _estimatorMap.resize(); },
+    setNodes: (nodeMap) => {
+      if (!_estimatorMap) return;
+      if (_estimatorMap.isStyleLoaded()) {
+        _updateEstimatorMapNodes(nodeMap);
+      } else {
+        _estimatorMap.once('load', () => _updateEstimatorMapNodes(nodeMap));
+      }
+    }
+  };
 }
 
 /**
@@ -343,7 +629,7 @@ async function runEstimation() {
     setStatus('확률적 도착 시간 계산 중…');
     const distribution = aggregateResults(adapted, _kernel, candidates);
 
-    /* Step 5 – render */
+    /* Step 5 – render (also draws route on map) */
     renderResult(distribution);
     setStatus(
       `추정 완료: ${formatHours(distribution.modeHours)} 후 도착 (신뢰도 ${Math.round(distribution.confidence * 100)}%)`,
@@ -420,3 +706,4 @@ async function _fetchAndLoadSignalData(originIata, destIata) {
     /* Silently ignore — signal data is optional */
   }
 }
+
