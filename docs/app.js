@@ -17,13 +17,19 @@ const state = {
   nativeHealth: null,
   nativeDirectCache: new Map(),
   trackingRouteHintIntl: null,
-  trackingUserDestIso: 'KR'
+  trackingUserDestIso: 'KR',
+  hasTouch: false
 };
 
 // Global MapLibre map objects
 let mainMapLibre = null;
 let modalMapLibre = null;
 const MOBILE_BREAKPOINT_WIDTH = 768;
+const TILE_ENDPOINTS = [
+  'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'
+];
 
 const MapLayerStyle = {
   NODE_CIRCLE: {
@@ -1138,6 +1144,14 @@ function detectMobile() {
   return window.innerWidth <= MOBILE_BREAKPOINT_WIDTH;
 }
 
+function detectTouchDevice() {
+  return !!(
+    (typeof window !== 'undefined' && 'ontouchstart' in window) ||
+    (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) ||
+    (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches)
+  );
+}
+
 // WASM Module Loader
 async function initWasm() {
   if (typeof WebAssembly === 'undefined') {
@@ -1344,19 +1358,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- MapLibre GL JS Integration ---
   function initMap(containerId, isModal = false) {
+    let currentTileEndpointIndex = 0;
     const map = new maplibregl.Map({
       container: containerId,
       dragPan: true,
       scrollZoom: !state.isMobile,
-      touchZoomRotate: state.isMobile,
-      dragRotate: !state.isMobile,
+      touchZoomRotate: true,
+      dragRotate: false,
       keyboard: !state.isMobile,
       style: {
         version: 8,
         sources: {
           osm: {
             type: 'raster',
-            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+            tiles: [TILE_ENDPOINTS[currentTileEndpointIndex]],
             tileSize: 256,
             attribution: '© OpenStreetMap contributors'
           }
@@ -1368,6 +1383,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
+    map.touchZoomRotate.disableRotation();
 
     map.on('load', () => {
       map.addSource('nodes', {
@@ -1424,7 +1440,38 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
+    map.on('error', (event) => {
+      if (!event || event.sourceId !== 'osm') return;
+      const source = map.getSource('osm');
+      if (!source || typeof source.setTiles !== 'function') return;
+      const nextIndex = (currentTileEndpointIndex + 1) % TILE_ENDPOINTS.length;
+      if (nextIndex === currentTileEndpointIndex) return;
+      currentTileEndpointIndex = nextIndex;
+      source.setTiles([TILE_ENDPOINTS[currentTileEndpointIndex]]);
+      map.triggerRepaint();
+      console.warn('[map] OSM 타일 오류로 타일 엔드포인트를 교체했습니다:', TILE_ENDPOINTS[currentTileEndpointIndex]);
+    });
+
     return map;
+  }
+
+  function applyMapInteractionMode(mapInstance) {
+    if (!mapInstance) return;
+    if (state.isMobile) {
+      mapInstance.scrollZoom.disable();
+      mapInstance.keyboard.disable();
+    } else {
+      mapInstance.scrollZoom.enable();
+      mapInstance.keyboard.enable();
+    }
+    if (state.hasTouch) {
+      mapInstance.touchZoomRotate.enable();
+      mapInstance.touchZoomRotate.disableRotation();
+    } else {
+      mapInstance.touchZoomRotate.disable();
+    }
+    mapInstance.dragPan.enable();
+    mapInstance.dragRotate.disable();
   }
 
   function updateMapNodes(mapInstance) {
@@ -2724,8 +2771,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   setActivePanel(state.uiMode || 'manual');
   window.addEventListener('resize', () => {
+    state.isMobile = detectMobile();
+    state.hasTouch = detectTouchDevice();
+    applyMapInteractionMode(mainMapLibre);
+    applyMapInteractionMode(modalMapLibre);
     if (mainMapLibre) mainMapLibre.resize();
     if (modalMapLibre) modalMapLibre.resize();
+  });
+  window.addEventListener('orientationchange', () => {
+    window.setTimeout(() => {
+      if (mainMapLibre) mainMapLibre.resize();
+      if (modalMapLibre) modalMapLibre.resize();
+    }, 180);
   });
 
   /* Initialise the parcel estimator tab (independent pipeline) */
@@ -2745,6 +2802,7 @@ document.addEventListener('DOMContentLoaded', () => {
 async function init() {
   // Detect mobile device
   state.isMobile = detectMobile();
+  state.hasTouch = detectTouchDevice();
   
   // Removed setupTouchGestures();
   
@@ -2764,9 +2822,11 @@ async function init() {
     const modalMapContainerId = mapContainerLarge ? 'map-container-large' : (document.getElementById('route-map-large') ? 'route-map-large' : null);
     if (mainMapContainerId) {
       mainMapLibre = initMap(mainMapContainerId);
+      applyMapInteractionMode(mainMapLibre);
     }
     if (modalMapContainerId) {
       modalMapLibre = initMap(modalMapContainerId, true);
+      applyMapInteractionMode(modalMapLibre);
     }
   } else {
     console.warn('MapLibre unavailable; map rendering is disabled in this environment.');
