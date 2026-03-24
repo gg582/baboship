@@ -65,7 +65,7 @@
                     <button type="button" data-field="to">도착 공항 지정</button>
                 </div>
                 <div id="map-wrapper">
-                    <canvas id="route-map" class="map-canvas"></canvas>
+                    <div id="map-container" class="map-canvas" role="application" aria-label="공항 경로 지도"></div>
                     <div id="map-loader">공항 데이터를 불러오는 중...</div>
                 </div>
                 <div class="selection-panel">
@@ -129,7 +129,7 @@
     <div id="map-modal" class="map-modal" aria-hidden="true">
         <div class="map-modal-content">
             <button type="button" class="map-modal-close" id="map-modal-close" aria-label="크게보기 닫기">X</button>
-            <canvas id="route-map-large" class="map-canvas"></canvas>
+            <div id="map-container-large" class="map-canvas" role="application" aria-label="확대 공항 경로 지도"></div>
         </div>
     </div>
     <script src="app.js" type="module" defer></script>
