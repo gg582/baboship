@@ -2685,6 +2685,132 @@ document.addEventListener('DOMContentLoaded', () => {
   modeTabs.forEach(tab => tab.addEventListener('click', () => setActivePanel(tab.dataset.modeTab || 'manual')));
   if (trackingFetchBtnIntl) trackingFetchBtnIntl.addEventListener('click', () => { handleTrackingFetchIntl().catch(err => console.error(err)); });
   if (trackingAnalyzeBtnIntl && trackingLogInputIntl) trackingAnalyzeBtnIntl.addEventListener('click', () => { runTrackingAnalysisIntl(trackingLogInputIntl.value).catch(err => console.error(err)); });
+
+  // ── 해운 탭 핸들러 ────────────────────────────────────────────────────
+  const maritimeTrackingNumber = document.getElementById('maritime-tracking-number');
+  const maritimeFetchBtn = document.getElementById('maritime-fetch-btn');
+  const maritimeTrackingStatus = document.getElementById('maritime-tracking-status');
+  const maritimeTrackingTimeline = document.getElementById('maritime-tracking-timeline');
+  const maritimeFromCode = document.getElementById('maritime-from-code');
+  const maritimeToCode = document.getElementById('maritime-to-code');
+  const maritimeSearchBtn = document.getElementById('maritime-search-btn');
+  const maritimeRouteStatus = document.getElementById('maritime-route-status');
+  const maritimeRouteResults = document.getElementById('maritime-route-results');
+
+  function isSeaPostInvoice(invoice) {
+    // UPU S10 선편 소포: 서비스 클래스 CP, CX, CC, CF, CM, CO 등
+    const normalized = (invoice || '').trim().toUpperCase();
+    const upuPattern = /^[A-Z]{2}\d{9}[A-Z]{2}$/;
+    if (!upuPattern.test(normalized)) return false;
+    const prefix = normalized.slice(0, 2);
+    // 선편 소포 서비스 클래스 (air mail은 제외)
+    const seaClasses = ['CP', 'CX', 'CC', 'CF', 'CM', 'CO', 'PC', 'PP'];
+    return seaClasses.includes(prefix);
+  }
+
+  async function handleMaritimeFetch() {
+    if (!maritimeTrackingNumber) return;
+    const invoice = maritimeTrackingNumber.value.trim().toUpperCase();
+    if (!invoice) {
+      if (maritimeTrackingStatus) maritimeTrackingStatus.textContent = '송장번호를 입력하세요.';
+      maritimeTrackingNumber.focus();
+      return;
+    }
+
+    // 컨테이너 번호(ISO 6346) 또는 B/L은 우체국 API 미지원 안내
+    const containerPattern = /^[A-Z]{4}\d{7}$/;
+    if (containerPattern.test(invoice)) {
+      if (maritimeTrackingStatus) {
+        maritimeTrackingStatus.textContent = '컨테이너 번호는 우체국 연동을 지원하지 않습니다. 해당 선사(HMM, Maersk 등) 홈페이지 또는 유니패스(unipass.customs.go.kr)에서 조회하세요.';
+      }
+      return;
+    }
+
+    // UPU S10 형식이 아니면 안내
+    const upuPattern = /^[A-Z]{2}\d{9}[A-Z]{2}$/;
+    if (!upuPattern.test(invoice)) {
+      if (maritimeTrackingStatus) {
+        maritimeTrackingStatus.textContent = '인식되지 않는 번호 형식입니다. 선편 소포(CP123456789KR 등) UPU S10 형식을 입력하세요.';
+      }
+      return;
+    }
+
+    if (!isSeaPostInvoice(invoice)) {
+      if (maritimeTrackingStatus) {
+        maritimeTrackingStatus.textContent = `⚠️ ${invoice.slice(0,2)}로 시작하는 번호는 선편이 아닌 항공 우편(EMS 등)일 수 있습니다. EMS 경로 효율 탭에서 조회하는 것이 더 정확합니다. 그래도 여기서 조회를 계속합니다...`;
+      }
+    } else {
+      if (maritimeTrackingStatus) maritimeTrackingStatus.textContent = '우체국에서 선편 소포 이력 조회 중...';
+    }
+
+    try {
+      const carriers = resolveKoreaPostCarriers(invoice);
+      const trackingPayload = await fetchTrackingEventsIntl(invoice, carriers);
+      const rawEvents = Array.isArray(trackingPayload?.progresses) ? trackingPayload.progresses : [];
+      const events = enrichTrackingEvents(rawEvents);
+
+      if (!events.length) {
+        if (maritimeTrackingStatus) maritimeTrackingStatus.textContent = '이벤트 데이터를 찾지 못했습니다. 우체국 선편 소포 번호인지 확인하세요.';
+        if (maritimeTrackingTimeline) maritimeTrackingTimeline.innerHTML = '<div class="empty-state">조회 결과 없음</div>';
+        return;
+      }
+
+      if (maritimeTrackingStatus) maritimeTrackingStatus.textContent = `이벤트 ${events.length}건 조회됨`;
+      if (maritimeTrackingTimeline) renderTrackingTimeline(maritimeTrackingTimeline, events);
+    } catch (err) {
+      if (maritimeTrackingStatus) maritimeTrackingStatus.textContent = '조회 실패: ' + (err.message || String(err));
+      if (maritimeTrackingTimeline) maritimeTrackingTimeline.innerHTML = '<div class="empty-state">조회 중 오류가 발생했습니다.</div>';
+    }
+  }
+
+  async function handleMaritimeRouteSearch() {
+    const from = (maritimeFromCode?.value || '').trim().toUpperCase();
+    const to = (maritimeToCode?.value || '').trim().toUpperCase();
+    if (!from || !to) {
+      if (maritimeRouteStatus) maritimeRouteStatus.textContent = '출발·도착 항구 코드를 모두 입력하세요.';
+      return;
+    }
+    if (maritimeRouteStatus) maritimeRouteStatus.textContent = '탐색 중...';
+    if (maritimeRouteResults) maritimeRouteResults.innerHTML = '<div class="empty-state">계산 중...</div>';
+    try {
+      const data = await runRouteSearch(from, to, 3, 10);
+      const paths = Array.isArray(data.paths) ? data.paths : [];
+      if (!paths.length) {
+        if (maritimeRouteStatus) maritimeRouteStatus.textContent = '경로를 찾지 못했습니다.';
+        if (maritimeRouteResults) maritimeRouteResults.innerHTML = '<div class="empty-state">해당 구간의 해운 경로가 없습니다.</div>';
+        return;
+      }
+      if (maritimeRouteStatus) maritimeRouteStatus.textContent = `경로 ${paths.length}개 발견`;
+      if (maritimeRouteResults) {
+        maritimeRouteResults.innerHTML = paths.map((p, i) => `
+          <div class="result-card">
+            <h3>경로 ${i + 1}: ${p.nodes.map(n => n.code).join(' → ')}</h3>
+            <p>${p.legs}구간 · ${p.totalDistanceKm.toFixed(0)} km · 레이어: ${p.layer || '-'} · 효율 ${p.efficiency.toFixed(3)}</p>
+          </div>
+        `).join('');
+      }
+    } catch (err) {
+      if (maritimeRouteStatus) maritimeRouteStatus.textContent = '오류: ' + (err.message || String(err));
+      if (maritimeRouteResults) maritimeRouteResults.innerHTML = `<div class="empty-state">${err.message}</div>`;
+    }
+  }
+
+  if (maritimeFetchBtn) {
+    maritimeFetchBtn.addEventListener('click', () => handleMaritimeFetch().catch(err => console.error(err)));
+  }
+  if (maritimeTrackingNumber) {
+    maritimeTrackingNumber.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); handleMaritimeFetch(); }
+    });
+  }
+  if (maritimeSearchBtn) {
+    maritimeSearchBtn.addEventListener('click', () => handleMaritimeRouteSearch().catch(err => console.error(err)));
+  }
+  [maritimeFromCode, maritimeToCode].forEach(el => {
+    if (el) el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); handleMaritimeRouteSearch(); }
+    });
+  });
   if (trackingDestinationSelect) {
     trackingDestinationSelect.addEventListener('change', () => {
       state.trackingUserDestIso = trackingDestinationSelect.value || 'KR';
