@@ -213,13 +213,6 @@ int nuke_flight_store_init(nuke_flight_store_t *store,
     ttak_mem_tree_init(&store->mem_tree);
     store->mem_tree_ready = true;
 
-    // Temporarily disable worker pool for native build since cwist library is missing
-    (void)worker_threads; // Mark as used to avoid warning
-    store->worker_thread_count = 0; 
-    store->worker_queue = NULL;
-    store->worker_threads = NULL;
-
-    /*
     store->worker_thread_count = worker_threads ? worker_threads : NUKE_DEFAULT_WORKERS;
     store->worker_queue = cwist_io_queue_create(store->worker_thread_count * 64);
     if (!store->worker_queue) {
@@ -244,7 +237,6 @@ int nuke_flight_store_init(nuke_flight_store_t *store,
             return NUKE_ERR_INTERNAL;
         }
     }
-    */
 
     int refresh_rc = nuke_store_refresh(store);
     if (refresh_rc != CWIST_NUKE_OK) {
@@ -259,24 +251,20 @@ void nuke_flight_store_destroy(nuke_flight_store_t *store) {
     if (!store) return;
 
 #ifndef __EMSCRIPTEN__
-    // Temporarily disabled worker pool cleanup for native build
-    /*
+    if (store->worker_queue) {
+        cwist_io_queue_stop(store->worker_queue);
+    }
     if (store->worker_threads) {
-        for (size_t i = 0; i < store->worker_thread_count; ++i) {
-            pthread_cancel(store->worker_threads[i]);
-        }
         for (size_t i = 0; i < store->worker_thread_count; ++i) {
             pthread_join(store->worker_threads[i], NULL);
         }
         ttak_mem_free(store->worker_threads);
         store->worker_threads = NULL;
     }
-
     if (store->worker_queue) {
         cwist_io_queue_destroy(store->worker_queue);
         store->worker_queue = NULL;
     }
-    */
 
     if (store->mem_tree_ready) {
         ttak_mem_tree_destroy(&store->mem_tree);
@@ -355,14 +343,211 @@ static void reset_vertical_arrays(nuke_flight_store_t *store) {
 
 
 
+#ifndef __EMSCRIPTEN__
+static int load_nodes(nuke_flight_store_t *store) {
+    int64_t count = 0;
+    int rc = fetch_count(store->nuke_db, "SELECT COUNT(*) FROM nodes;", &count);
+    if (rc != CWIST_NUKE_OK || count <= 0) return NUKE_ERR_DATA;
+
+    uint64_t now = ttak_get_tick_count();
+    store->node_count = (size_t)count;
+    store->node_ids = ttak_mem_alloc(sizeof(int) * store->node_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
+    store->node_lat = ttak_mem_alloc(sizeof(double) * store->node_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
+    store->node_lon = ttak_mem_alloc(sizeof(double) * store->node_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
+    store->node_codes = ttak_mem_alloc(sizeof(char[4]) * store->node_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
+    store->node_countries = ttak_mem_alloc(sizeof(char[32]) * store->node_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
+    store->node_layers = ttak_mem_alloc(sizeof(char) * store->node_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
+    if (!store->node_ids || !store->node_lat || !store->node_lon ||
+        !store->node_codes || !store->node_countries || !store->node_layers) {
+        return NUKE_ERR_INTERNAL;
+    }
+    ttak_mem_tree_add(&store->mem_tree, store->node_ids, sizeof(int) * store->node_count, 0, true);
+    ttak_mem_tree_add(&store->mem_tree, store->node_lat, sizeof(double) * store->node_count, 0, true);
+    ttak_mem_tree_add(&store->mem_tree, store->node_lon, sizeof(double) * store->node_count, 0, true);
+    ttak_mem_tree_add(&store->mem_tree, store->node_codes, sizeof(char[4]) * store->node_count, 0, true);
+    ttak_mem_tree_add(&store->mem_tree, store->node_countries, sizeof(char[32]) * store->node_count, 0, true);
+    ttak_mem_tree_add(&store->mem_tree, store->node_layers, sizeof(char) * store->node_count, 0, true);
+
+    sqlite3_stmt *stmt = NULL;
+    const char *sql = "SELECT id, code, latitude, longitude, COALESCE(country, ''), layer FROM nodes ORDER BY id ASC;";
+    if (sqlite3_prepare_v2(store->nuke_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return NUKE_ERR_INTERNAL;
+    }
+    size_t idx = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        if (idx >= store->node_count) break;
+        store->node_ids[idx] = sqlite3_column_int(stmt, 0);
+        const unsigned char *code_txt = sqlite3_column_text(stmt, 1);
+        double lat = sqlite3_column_double(stmt, 2);
+        double lon = sqlite3_column_double(stmt, 3);
+        const unsigned char *country_txt = sqlite3_column_text(stmt, 4);
+        const unsigned char *layer_txt = sqlite3_column_text(stmt, 5);
+        store->node_lat[idx] = lat;
+        store->node_lon[idx] = lon;
+
+        char code_buf[4] = {0};
+        if (code_txt) {
+            size_t len = strlen((const char *)code_txt);
+            for (size_t c = 0; c < 3 && c < len; ++c) {
+                code_buf[c] = (char)toupper(code_txt[c]);
+            }
+        }
+        store->node_codes[idx][0] = code_buf[0];
+        store->node_codes[idx][1] = code_buf[1];
+        store->node_codes[idx][2] = code_buf[2];
+        store->node_codes[idx][3] = '\0';
+
+        memset(store->node_countries[idx], 0, 32);
+        if (country_txt) {
+            snprintf(store->node_countries[idx], 32, "%s", (const char *)country_txt);
+        }
+
+        if (layer_txt && strcmp((const char *)layer_txt, "sea") == 0) {
+            store->node_layers[idx] = 1;
+        } else if (layer_txt && strcmp((const char *)layer_txt, "land") == 0) {
+            store->node_layers[idx] = 2;
+        } else {
+            store->node_layers[idx] = 0;
+        }
+        ++idx;
+    }
+    sqlite3_finalize(stmt);
+    if (idx != store->node_count) {
+        return NUKE_ERR_DATA;
+    }
+
+    store->code_capacity = next_pow_two(store->node_count * 2);
+    store->code_keys = ttak_mem_alloc(sizeof(uint32_t) * store->code_capacity, __TTAK_UNSAFE_MEM_FOREVER__, now);
+    store->code_indices = ttak_mem_alloc(sizeof(size_t) * store->code_capacity, __TTAK_UNSAFE_MEM_FOREVER__, now);
+    if (!store->code_keys || !store->code_indices) {
+        return NUKE_ERR_INTERNAL;
+    }
+    ttak_mem_tree_add(&store->mem_tree, store->code_keys, sizeof(uint32_t) * store->code_capacity, 0, true);
+    ttak_mem_tree_add(&store->mem_tree, store->code_indices, sizeof(size_t) * store->code_capacity, 0, true);
+    memset(store->code_keys, 0, sizeof(uint32_t) * store->code_capacity);
+    memset(store->code_indices, 0xFF, sizeof(size_t) * store->code_capacity);
+
+    for (size_t i = 0; i < store->node_count; ++i) {
+        uint32_t key = pack_code(store->node_codes[i]);
+        if (!key) continue;
+        size_t cap = store->code_capacity;
+        size_t mask = cap - 1;
+        size_t slot = (key * 2654435761u) & mask;
+        for (size_t attempt = 0; attempt < cap; ++attempt) {
+            if (store->code_keys[slot] == 0) {
+                store->code_keys[slot] = key;
+                store->code_indices[slot] = i;
+                break;
+            } else if (store->code_keys[slot] == key) {
+                store->code_indices[slot] = i;
+                break;
+            }
+            slot = (slot + 1) & mask;
+        }
+    }
+
+    return CWIST_NUKE_OK;
+}
+
+static int load_routes(nuke_flight_store_t *store) {
+    int64_t count = 0;
+    int rc = fetch_count(store->nuke_db, "SELECT COUNT(*) FROM routes;", &count);
+    if (rc != CWIST_NUKE_OK || count <= 0) return NUKE_ERR_DATA;
+
+    store->route_count = (size_t)count;
+    uint64_t now = ttak_get_tick_count();
+    store->route_offsets = ttak_mem_alloc(sizeof(size_t) * store->node_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
+    store->route_counts = ttak_mem_alloc(sizeof(size_t) * store->node_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
+    store->adj_route_ids = ttak_mem_alloc(sizeof(int) * store->route_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
+    store->adj_dst_indices = ttak_mem_alloc(sizeof(size_t) * store->route_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
+    store->adj_distance = ttak_mem_alloc(sizeof(double) * store->route_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
+    store->adj_route_layers = ttak_mem_alloc(sizeof(char) * store->route_count, __TTAK_UNSAFE_MEM_FOREVER__, now);
+
+    if (!store->route_offsets || !store->route_counts ||
+        !store->adj_route_ids || !store->adj_dst_indices || !store->adj_distance || !store->adj_route_layers) {
+        return NUKE_ERR_INTERNAL;
+    }
+
+    ttak_mem_tree_add(&store->mem_tree, store->route_offsets, sizeof(size_t) * store->node_count, 0, true);
+    ttak_mem_tree_add(&store->mem_tree, store->route_counts, sizeof(size_t) * store->node_count, 0, true);
+    ttak_mem_tree_add(&store->mem_tree, store->adj_route_ids, sizeof(int) * store->route_count, 0, true);
+    ttak_mem_tree_add(&store->mem_tree, store->adj_dst_indices, sizeof(size_t) * store->route_count, 0, true);
+    ttak_mem_tree_add(&store->mem_tree, store->adj_distance, sizeof(double) * store->route_count, 0, true);
+    ttak_mem_tree_add(&store->mem_tree, store->adj_route_layers, sizeof(char) * store->route_count, 0, true);
+
+    memset(store->route_counts, 0, sizeof(size_t) * store->node_count);
+
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(store->nuke_db, "SELECT src_id FROM routes ORDER BY src_id ASC;", -1, &stmt, NULL) != SQLITE_OK) {
+        return NUKE_ERR_INTERNAL;
+    }
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int src_id = sqlite3_column_int(stmt, 0);
+        ssize_t idx = find_node_index_by_id(store, src_id);
+        if (idx >= 0) {
+            store->route_counts[idx]++;
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    size_t offset = 0;
+    for (size_t i = 0; i < store->node_count; ++i) {
+        store->route_offsets[i] = offset;
+        offset += store->route_counts[i];
+        store->route_counts[i] = 0;
+    }
+
+    if (sqlite3_prepare_v2(store->nuke_db,
+                           "SELECT id, src_id, dst_id, distance_km, layer "
+                           "FROM routes ORDER BY src_id ASC;",
+                           -1,
+                           &stmt,
+                           NULL) != SQLITE_OK) {
+        return NUKE_ERR_INTERNAL;
+    }
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int route_id = sqlite3_column_int(stmt, 0);
+        int src_id = sqlite3_column_int(stmt, 1);
+        int dst_id = sqlite3_column_int(stmt, 2);
+        double distance = sqlite3_column_double(stmt, 3);
+        const unsigned char *layer_txt = sqlite3_column_text(stmt, 4);
+
+        ssize_t src_idx = find_node_index_by_id(store, src_id);
+        ssize_t dst_idx = find_node_index_by_id(store, dst_id);
+        if (src_idx < 0 || dst_idx < 0) continue;
+
+        size_t cursor = store->route_offsets[src_idx] + store->route_counts[src_idx];
+        if (cursor >= store->route_count) continue;
+
+        store->adj_route_ids[cursor] = route_id;
+        store->adj_dst_indices[cursor] = (size_t)dst_idx;
+        store->adj_distance[cursor] = distance;
+        if (layer_txt && strcmp((const char *)layer_txt, "sea") == 0) {
+            store->adj_route_layers[cursor] = 1;
+        } else if (layer_txt && strcmp((const char *)layer_txt, "land") == 0) {
+            store->adj_route_layers[cursor] = 2;
+        } else {
+            store->adj_route_layers[cursor] = 0;
+        }
+        store->route_counts[src_idx]++;
+    }
+    sqlite3_finalize(stmt);
+
+    return CWIST_NUKE_OK;
+}
+#endif
+
 int nuke_store_refresh(nuke_flight_store_t *store) {
     if (!store) return NUKE_ERR_INPUT;
     reset_vertical_arrays(store);
 #ifdef __EMSCRIPTEN__
     return CWIST_NUKE_OK;
 #else
-    // Removed load_airports and load_routes calls, as they are now handled by blob loading or not applicable
-    return CWIST_NUKE_OK; 
+    if (!store->nuke_db) return CWIST_NUKE_OK;
+    int rc = load_nodes(store);
+    if (rc != CWIST_NUKE_OK) return rc;
+    return load_routes(store);
 #endif
 }
 
@@ -444,11 +629,9 @@ static void append_result_locked(nuke_worker_group_t *group,
             size_t degree = group->store->route_counts[src_node_idx];
             for (size_t route_i = 0; route_i < degree; ++route_i) {
                 if (group->store->adj_dst_indices[offset + route_i] == dst_node_idx) {
-                    /* adj_route_layers stores one byte per route: 0=air, 1=sea, 2=land */
-                    unsigned char lb = (unsigned char)group->store->adj_route_layers[offset + route_i];
-                    const char *ls = (lb == 1) ? "sea" : (lb == 2) ? "land" : "air";
-                    strncpy(slot->layer, ls, NUKE_LAYER_MAX_LEN - 1);
-                    slot->layer[NUKE_LAYER_MAX_LEN - 1] = '\0'; // Ensure null-termination
+                    uint8_t r_layer = group->store->adj_route_layers ? (uint8_t)group->store->adj_route_layers[offset + route_i] : 0;
+                    const char *lname = (r_layer == 1) ? "sea" : (r_layer == 2) ? "land" : "air";
+                    snprintf(slot->layer, sizeof(slot->layer), "%s", lname);
                     break;
                 }
             }

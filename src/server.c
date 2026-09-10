@@ -123,6 +123,8 @@ static bool ensure_best_nodes_seed_locked(sqlite3 *conn) {
     if (sqlite3_exec(conn, ddl, NULL, NULL, NULL) != SQLITE_OK) {
         return false;
     }
+    sqlite3_exec(conn, "ALTER TABLE logistics_best_nodes RENAME COLUMN anchor_airport TO anchor_node;", NULL, NULL, NULL);
+    sqlite3_exec(conn, "ALTER TABLE logistics_best_nodes ADD COLUMN layer TEXT NOT NULL DEFAULT 'air';", NULL, NULL, NULL);
     sqlite3_stmt *stmt = NULL;
     size_t row_count = 0;
     if (sqlite3_prepare_v2(conn, "SELECT COUNT(*) FROM logistics_best_nodes;", -1, &stmt, NULL) != SQLITE_OK) {
@@ -623,9 +625,9 @@ static void nodes_handler(cwist_http_request *req, cwist_http_response *res) { /
             cJSON_AddStringToObject(node, "country", g_state.store.node_countries[i]); // Renamed airport_countries to node_countries
         }
         if (g_state.store.node_layers) { // Added layer
-            unsigned char lb = (unsigned char)g_state.store.node_layers[i];
-            const char *ls = (lb == 1) ? "sea" : (lb == 2) ? "land" : "air";
-            cJSON_AddStringToObject(node, "layer", ls);
+            uint8_t lcode = (uint8_t)g_state.store.node_layers[i];
+            const char *layer_str = (lcode == 1) ? "sea" : (lcode == 2 ? "land" : "air");
+            cJSON_AddStringToObject(node, "layer", layer_str);
         }
         cJSON_AddItemToArray(arr, node);
         emitted++;
@@ -652,19 +654,19 @@ static void routes_handler(cwist_http_request *req, cwist_http_response *res) {
         return;
     }
 
-    if (!nuke_store_has_node(&g_state.store, from_code) || // Renamed nuke_store_has_airport to nuke_store_has_node
-        !nuke_store_has_node(&g_state.store, to_code)) { // Renamed nuke_store_has_airport to nuke_store_has_node
-        cJSON *err = cJSON_CreateObject();
-        cJSON_AddStringToObject(err, "error", "요청한 공항 코드를 찾을 수 없습니다.");
-        write_json_response(res, err, CWIST_HTTP_NOT_FOUND);
-        return;
-    }
-
     const char *block_reason = NULL;
     if (is_route_restricted(from_code, to_code, &block_reason)) {
         cJSON *err = cJSON_CreateObject();
         cJSON_AddStringToObject(err, "error", block_reason ? block_reason : "해당 노선은 제한되어 있습니다.");
         write_json_response(res, err, CWIST_HTTP_FORBIDDEN);
+        return;
+    }
+
+    if (!nuke_store_has_node(&g_state.store, from_code) || // Renamed nuke_store_has_airport to nuke_store_has_node
+        !nuke_store_has_node(&g_state.store, to_code)) { // Renamed nuke_store_has_airport to nuke_store_has_node
+        cJSON *err = cJSON_CreateObject();
+        cJSON_AddStringToObject(err, "error", "요청한 공항 코드를 찾을 수 없습니다.");
+        write_json_response(res, err, CWIST_HTTP_NOT_FOUND);
         return;
     }
 
@@ -817,9 +819,9 @@ static void direct_handler(cwist_http_request *req, cwist_http_response *res) {
             cJSON_AddStringToObject(node, "country", g_state.store.node_countries[dst_idx]); // Renamed airport_countries to node_countries
         }
         if (g_state.store.node_layers) { // Added layer
-            unsigned char lb = (unsigned char)g_state.store.node_layers[dst_idx];
-            const char *ls = (lb == 1) ? "sea" : (lb == 2) ? "land" : "air";
-            cJSON_AddStringToObject(node, "layer", ls);
+            uint8_t lcode = (uint8_t)g_state.store.node_layers[dst_idx];
+            const char *layer_str = (lcode == 1) ? "sea" : (lcode == 2 ? "land" : "air");
+            cJSON_AddStringToObject(node, "layer", layer_str);
         }
         cJSON_AddItemToArray(arr, node);
     }

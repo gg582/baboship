@@ -97,9 +97,8 @@ const nuke_flight_store_t* nuke_wasm_get_store(void) {
     return &g_store;
 }
 
-/* node_layers stores one byte per node: 0=air, 1=sea, 2=land */
-static const char* nuke_layer_byte_to_str(unsigned char b) {
-    switch (b) {
+static inline const char *nuke_get_layer_name(uint8_t code) {
+    switch (code) {
         case 1: return "sea";
         case 2: return "land";
         default: return "air";
@@ -132,9 +131,7 @@ const char* nuke_wasm_get_nodes_json(void) {
     offset += sprintf(buffer + offset, "{\"total\":%zu,\"nodes\":[", g_store.node_count);
     for (size_t i = 0; i < g_store.node_count; ++i) {
         const char *country = g_store.node_countries ? g_store.node_countries[i] : "";
-        const char *layer = g_store.node_layers
-            ? nuke_layer_byte_to_str((unsigned char)g_store.node_layers[i])
-            : "air";
+        const char *layer = g_store.node_layers ? nuke_get_layer_name((uint8_t)g_store.node_layers[i]) : "air";
         offset += sprintf(buffer + offset, 
             "%s{\"id\":%d,\"code\":\"%s\",\"lat\":%.4f,\"lon\":%.4f,\"country\":\"%s\",\"layer\":\"%s\"}",
             (i == 0 ? "" : ","),
@@ -334,9 +331,7 @@ const char* nuke_wasm_get_direct_destinations_json(const char *code) {
         
         double dist = g_store.adj_distance[off + i];
         const char *country = g_store.node_countries ? g_store.node_countries[dst_idx] : ""; // Renamed from airport_countries
-        const char *layer = g_store.node_layers
-            ? nuke_layer_byte_to_str((unsigned char)g_store.node_layers[dst_idx])
-            : "air"; // Added layer
+        const char *layer = g_store.node_layers ? nuke_get_layer_name((uint8_t)g_store.node_layers[dst_idx]) : "air"; // Added layer
         size_t rem = buffer_size - offset;
         offset += snprintf(buffer + offset, rem,
             "%s{\"code\":\"%s\",\"lat\":%.4f,\"lon\":%.4f,\"distKm\":%.1f,\"connections\":%zu,\"country\":\"%s\",\"layer\":\"%s\"}", // Added layer
@@ -355,39 +350,50 @@ const char* nuke_wasm_get_direct_destinations_json(const char *code) {
 }
 
 WASM_KEEPALIVE
-const char* nuke_wasm_get_best_nodes_json(void) {
-    if (!g_initialized || g_store.node_count == 0) // Renamed from airport_count
-        return "{\"items\":[]}";
+const char* nuke_wasm_get_best_nodes_json(void) { // Renamed from get_best_airports
+    if (!g_initialized || g_store.node_count == 0) return "{\"items\":[]}";
 
-    // Compute hub scores from actual route adjacency data.
-    typedef struct { size_t idx; double score; size_t connections; double avg_dist; } hub_t;
+    typedef struct {
+        size_t idx;
+        size_t connections;
+        double avg_dist;
+        double score;
+    } hub_t;
 
-    size_t n = g_store.node_count; // Renamed from airport_count
-    hub_t *hubs = (hub_t *)malloc(n * sizeof(hub_t));
+    hub_t *hubs = malloc(sizeof(hub_t) * g_store.node_count); // Renamed from airport_count
     if (!hubs) return "{\"items\":[]}";
 
-    for (size_t i = 0; i < n; ++i) {
-        size_t cnt = g_store.route_counts[i];
-        double total_dist = 0.0;
+    size_t count = 0;
+    for (size_t i = 0; i < g_store.node_count; ++i) { // Renamed from airport_count
+        size_t conn = g_store.route_counts[i];
+        if (conn == 0) continue;
         size_t off = g_store.route_offsets[i];
-        for (size_t j = 0; j < cnt; ++j)
-            total_dist += g_store.adj_distance[off + j];
-        double avg = cnt > 0 ? total_dist / (double)cnt : 0.0;
-        hubs[i].idx = i;
-        hubs[i].connections = cnt;
-        hubs[i].avg_dist = avg;
-        hubs[i].score = cnt > 0 ? (double)cnt / (avg + 1.0) : 0.0;
+        double total_d = 0;
+        for (size_t j = 0; j < conn; ++j) {
+            total_d += g_store.adj_distance[off + j];
+        }
+        double avg_d = total_d / conn;
+        double score = (double)conn * 1000.0 / (avg_d > 100.0 ? avg_d : 100.0);
+
+        hubs[count].idx = i;
+        hubs[count].connections = conn;
+        hubs[count].avg_dist = avg_d;
+        hubs[count].score = score;
+        count++;
     }
 
-    // Partial selection sort for top 5
-    size_t top = n < 5 ? n : 5;
-    for (size_t i = 0; i < top; ++i) {
-        size_t best = i;
-        for (size_t j = i + 1; j < n; ++j)
-            if (hubs[j].score > hubs[best].score) best = j;
-        if (best != i) { hub_t tmp = hubs[i]; hubs[i] = hubs[best]; hubs[best] = tmp; }
+    // Sort by score descending (simple sort for WASM brevity)
+    for (size_t i = 0; i < count; i++) {
+        for (size_t j = i + 1; j < count; j++) {
+            if (hubs[j].score > hubs[i].score) {
+                hub_t tmp = hubs[i];
+                hubs[i] = hubs[j];
+                hubs[j] = tmp;
+            }
+        }
     }
 
+    size_t top = count < 5 ? count : 5;
     static char *buffer = NULL;
     static size_t buffer_size = 0;
     size_t needed = 256 + top * 256;
@@ -404,9 +410,7 @@ const char* nuke_wasm_get_best_nodes_json(void) {
     for (size_t i = 0; i < top; ++i) {
         hub_t *h = &hubs[i];
         const char *country = g_store.node_countries ? g_store.node_countries[h->idx] : ""; // Renamed from airport_countries
-        const char *layer = g_store.node_layers
-            ? nuke_layer_byte_to_str((unsigned char)g_store.node_layers[h->idx])
-            : "air"; // Added layer
+        const char *layer = g_store.node_layers ? nuke_get_layer_name((uint8_t)g_store.node_layers[h->idx]) : "air"; // Added layer
         remaining = buffer_size - offset;
         offset += snprintf(buffer + offset, remaining,
             "%s{\"anchorNode\":\"%s\",\"lat\":%.4f,\"lon\":%.4f," // Renamed from anchorAirport to anchorNode

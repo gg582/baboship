@@ -3,19 +3,15 @@ EMCC ?= emcc
 
 CWIST_DIR := lib/cwist
 TTAK_DIR := lib/libttak
-# CWIST_LIB := $(CWIST_DIR)/libcwist.a # Removed, as cwist is missing
+CWIST_LIB := $(CWIST_DIR)/libcwist.a
 TTAK_LIB := $(TTAK_DIR)/lib/libttak.a
 
-CFLAGS += -std=c17 -Wall -Wextra -Wpedantic -O3 -g
-CFLAGS += -Iinclude
-# CFLAGS += -I$(CWIST_DIR)/include # Removed, as cwist headers are missing
-CFLAGS += -I$(TTAK_DIR)/include # -I$(CWIST_DIR)/lib/sqlite3
+CFLAGS += -std=c17 -Wall -Wextra -Wpedantic -O3 -g -D_GNU_SOURCE
+CFLAGS += -Iinclude -I$(CWIST_DIR)/include -I$(TTAK_DIR)/include -I$(CWIST_DIR)/lib/cjson -I$(CWIST_DIR)/lib/sqlite3 -I$(CWIST_DIR)/lib/uriparser/include
 
-LDFLAGS += -pthread
-# LDFLAGS += -L$(CWIST_DIR) # Removed, as cwist is missing
-LDFLAGS += -L$(TTAK_DIR)/lib
+LDFLAGS += -pthread -L$(CWIST_DIR) -L$(TTAK_DIR)/lib
 
-LDLIBS += -lttak -lssl -lcrypto -luriparser -lcjson -ldl -lm # Removed -lcwist
+LDLIBS += $(CWIST_LIB) $(TTAK_LIB) $(CWIST_DIR)/lib/cjson/libcjson.a $(CWIST_DIR)/lib/uriparser/build/liburiparser.a $(CWIST_DIR)/lib/lsquic/build/src/liblsquic/liblsquic.a $(CWIST_DIR)/lib/boringssl/build/libssl.a $(CWIST_DIR)/lib/boringssl/build/libcrypto.a -lcurl -lnghttp2 -lbrotlienc -lbrotlicommon -lbrotlidec -lzstd -lssl -lcrypto -ldl -lm -lstdc++ -lz -pthread
 
 WASM_BUILD_DIR := build/wasm
 WASM_DIST_DIR := docs/wasm
@@ -36,31 +32,30 @@ FK_EXPORTS := '["_fk_init","_fk_load_signal_data","_fk_generate_candidates","_fk
 FK_RUNTIME_METHODS := '["cwrap","UTF8ToString","stringToUTF8","lengthBytesUTF8","allocate","intArrayFromString","ALLOC_NORMAL"]'
 FK_EMFLAGS := -s MODULARIZE=1 -s EXPORT_ES6=1 -s EXPORT_NAME=\"createFlightKernel\" -s ENVIRONMENT=web,worker -s ALLOW_MEMORY_GROWTH=1 -s NO_EXIT_RUNTIME=1
 
-APP := nukedb_app # Native app name (not built in this configuration)
-# SRC := src/nuke_flight.c src/server.c # Removed native app source
-# LOGISTICS_SRC := wasm/logistics_engine.c # Not used for native app
-# OBJ := $(SRC:src/%.c=build/%.o) build/logistics_engine.o # Removed native object files
+APP := nukedb_app
+SRC := src/nuke_flight.c src/server.c wasm/logistics_engine.c
+OBJ := $(patsubst %.c,build/%.o,$(SRC))
 
-.PHONY: all clean run sample-data wasm wasm_clean db-setup # Add db-setup
+.PHONY: all clean run sample-data wasm wasm_clean db-setup
 
-all: wasm # Only build wasm components
+all: wasm
 
-# $(APP): $(OBJ) $(CWIST_LIB) # Removed native app build rule
-# 	$(CC) $(LDFLAGS) $(OBJ) -o $@ $(LDLIBS)
+$(APP): $(OBJ) $(CWIST_LIB) $(TTAK_LIB)
+	$(CC) $(CFLAGS) $(OBJ) -o $@ $(LDFLAGS) $(LDLIBS)
 
-# Removed cwist library build rule
-# $(CWIST_LIB):
-# 	$(MAKE) -C $(CWIST_DIR) LIBTTAK_DIR=../libttak
+build/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-# run: $(APP) # Removed native app run rule
-# 	./$(APP)
+run: $(APP)
+	./$(APP)
 
 sample-data:
 	python3 scripts/create_sample_db.py data/nuke_routes.db
 
 clean:
-	rm -rf build $(APP) # Removed $(APP) from clean
-#	$(MAKE) -C $(CWIST_DIR) clean || true # Removed cwist clean
+	rm -rf build $(APP)
+	$(MAKE) -C $(CWIST_DIR) clean || true
 	$(MAKE) -C $(TTAK_DIR) clean || true
 
 wasm: $(WASM_TARGET) $(FK_TARGET) docs/wasm/nuke_blob.bin docs/airports.json

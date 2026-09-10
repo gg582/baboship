@@ -58,12 +58,12 @@ run_py scripts/ingest_openflights.py \
   --routes data/raw/routes.dat \
   --output data/nuke_routes.db
 
-# Maritime (海運) data ingestion is disabled by default because it is an
-# experimental beta feature.  Pass --with-maritime to opt in.
-WITH_MARITIME=0
+# Maritime (海運) data ingestion is enabled by default.
+# Pass --without-maritime to opt out.
+WITH_MARITIME=1
 for arg in "$@"; do
-  if [[ "$arg" == "--with-maritime" ]]; then
-    WITH_MARITIME=1
+  if [[ "$arg" == "--without-maritime" ]]; then
+    WITH_MARITIME=0
   fi
 done
 

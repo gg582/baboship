@@ -26,7 +26,6 @@
                 <button type="button" class="mode-tab active" data-mode-tab="tracking" role="tab" aria-controls="tracking-panel" aria-selected="true">EMS 경로 효율</button>
                 <button type="button" class="mode-tab" data-mode-tab="manual" role="tab" aria-controls="manual-panel" aria-selected="false">수동으로 공항 선택</button>
                 <button type="button" class="mode-tab mode-tab-beta" data-mode-tab="maritime" role="tab" aria-controls="maritime-panel" aria-selected="false" title="해운 경로는 실험적 기능입니다. 데이터 정확도가 항공 데이터보다 낮을 수 있습니다.">해운 경로 <span class="beta-badge">베타</span></button>
-                <button type="button" class="mode-tab mode-tab-beta" data-mode-tab="estimator" role="tab" aria-controls="estimator-panel" aria-selected="false" title="항공 신호 데이터를 이용한 확률적 소포 이동 경로 추정">소포 행방 추정 <span class="beta-badge">베타</span></button>
             </div>
         </header>
 
@@ -42,40 +41,6 @@
                             <span>송장번호</span>
                             <input type="text" id="tracking-number" placeholder="예: EG123456789KR" autocomplete="off">
                         </label>
-                        <label>
-                            <span>목적지 국가</span>
-                            <select id="tracking-destination-iso">
-                                <option value="KR" selected>🇰🇷 한국 (서울·인천)</option>
-                                <option value="US">🇺🇸 미국 (뉴욕)</option>
-                                <option value="JP">🇯🇵 일본 (도쿄)</option>
-                                <option value="CN">🇨🇳 중국 (상하이)</option>
-                                <option value="DE">🇩🇪 독일 (프랑크푸르트)</option>
-                                <option value="GB">🇬🇧 영국 (런던)</option>
-                                <option value="FR">🇫🇷 프랑스 (파리)</option>
-                                <option value="AU">🇦🇺 호주 (시드니)</option>
-                                <option value="CA">🇨🇦 캐나다 (토론토)</option>
-                                <option value="SG">🇸🇬 싱가포르</option>
-                                <option value="HK">🇭🇰 홍콩</option>
-                                <option value="IT">🇮🇹 이탈리아 (로마)</option>
-                                <option value="NL">🇳🇱 네덜란드 (암스테르담)</option>
-                                <option value="SE">🇸🇪 스웨덴 (스톡홀름)</option>
-                                <option value="AE">🇦🇪 UAE (두바이)</option>
-                                <option value="TH">🇹🇭 태국 (방콕)</option>
-                                <option value="MY">🇲🇾 말레이시아 (쿠알라룸푸르)</option>
-                                <option value="VN">🇻🇳 베트남 (호치민)</option>
-                                <option value="IN">🇮🇳 인도 (델리)</option>
-                                <option value="BR">🇧🇷 브라질 (상파울루)</option>
-                                <option value="RU">🇷🇺 러시아 (모스크바)</option>
-                                <option value="TR">🇹🇷 튀르키예 (이스탄불)</option>
-                                <option value="ZA">🇿🇦 남아프리카 (요하네스버그)</option>
-                                <option value="MX">🇲🇽 멕시코 (멕시코시티)</option>
-                                <option value="ES">🇪🇸 스페인 (마드리드)</option>
-                                <option value="FI">🇫🇮 핀란드 (헬싱키)</option>
-                                <option value="PH">🇵🇭 필리핀 (마닐라)</option>
-                                <option value="QA">🇶🇦 카타르 (도하)</option>
-                                <option value="SA">🇸🇦 사우디아라비아 (리야드)</option>
-                            </select>
-                        </label>
                         <button type="button" id="tracking-fetch-btn">우체국에서 불러오기</button>
                     </div>
                 </div>
@@ -89,44 +54,6 @@
                         <div class="tracking-status" id="tracking-status">송장번호를 입력하거나 이벤트 문자열을 붙여넣으세요.</div>
                     </div>
                 </div>
-
-                <details class="advanced-settings" id="advanced-settings">
-                    <summary>⚙️ 고급 설정</summary>
-                    <div class="advanced-settings-body">
-                        <section class="adv-section">
-                            <h3>🛰️ OpenSky Network 항공 신호 추적</h3>
-                            <p>우체국 API 응답에서 우편 EDI 라우팅 코드(예: <code>UAIEVCKRSELBAUX60062</code>)가 감지되면, 코드에 포함된 공항 정보를 파싱해 실제 화물 항공기를 OpenSky Network에서 조회하고 추적 이력에 병합합니다.</p>
-                            <p class="adv-note">⚠️ 우편 EDI 라우팅 코드는 <strong>SITA 주소가 아닙니다</strong>. 직항 경로가 아닌 경우도 많으며(예: 키이브→인천 실제 경로: 바르샤바/리가/프랑크푸르트 경유), OpenSky는 보조 참고 데이터로만 활용됩니다. 실제 배송 추적은 UPU S10 송장번호가 기준입니다.</p>
-                            <div class="opensky-mode-select" role="group" aria-label="OpenSky 접속 모드">
-                                <label class="radio-label">
-                                    <input type="radio" name="opensky-mode" value="anonymous" id="opensky-mode-anon" checked>
-                                    <span><strong>비로그인 (익명)</strong> — 하루 400 크레딧 · 5분 간격 · 현재 상태만</span>
-                                </label>
-                                <label class="radio-label">
-                                    <input type="radio" name="opensky-mode" value="registered" id="opensky-mode-reg">
-                                    <span><strong>계정 사용</strong> — 하루 4,000 크레딧 · 30초 간격 · 1시간 이력 조회</span>
-                                </label>
-                            </div>
-                            <div class="opensky-credentials hidden" id="opensky-credentials">
-                                <p class="adv-note">⚠️ 비밀번호가 브라우저 로컬스토리지에 <strong>암호화 없이</strong> 저장됩니다. 반드시 OpenSky 전용 계정을 사용하고 주 비밀번호를 입력하지 마세요.</p>
-                                <div class="form-grid">
-                                    <label>
-                                        <span>OpenSky 아이디</span>
-                                        <input type="text" id="opensky-username" placeholder="opensky-network.org 가입 아이디" autocomplete="username">
-                                    </label>
-                                    <label>
-                                        <span>비밀번호</span>
-                                        <input type="password" id="opensky-password" placeholder="••••••••" autocomplete="current-password">
-                                    </label>
-                                </div>
-                            </div>
-                            <div class="adv-actions">
-                                <button type="button" id="opensky-save-btn">설정 저장</button>
-                                <span class="opensky-badge anonymous" id="opensky-badge">🔓 비로그인 · 400 크레딧/일</span>
-                            </div>
-                        </section>
-                    </div>
-                </details>
                 <div class="tracking-metrics" id="tracking-metrics">
                     <div class="empty-state">분석 결과가 여기에 표시됩니다.</div>
                 </div>
@@ -262,81 +189,12 @@
                         <ul class="beta-notes">
                             <li>해운 데이터는 글로벌 주요 항로만 포함하며 정기선 시간표는 반영되지 않습니다.</li>
                             <li>항구 코드(IATA 형식 아님)가 표시될 수 있으며, 정확한 항구명 매핑이 제한적입니다.</li>
-                            <li>이 기능을 사용하려면 <code>generate_all.sh --with-maritime</code>으로 해운 데이터를 포함해 데이터베이스를 재생성해야 합니다.</li>
+                            <li>해운 데이터베이스가 기본 활성화되어 총 375개 해상 노드 및 239개 해운 경로가 통합되었습니다.</li>
                         </ul>
                     </div>
                 </div>
                 <div class="beta-placeholder">
-                    <div class="empty-state">🚢 해운 경로 기능이 곧 추가될 예정입니다.<br>현재 데이터베이스에는 항공 노선만 포함되어 있습니다.<br><code>generate_all.sh --with-maritime</code>을 실행해 해운 데이터를 활성화하세요.</div>
-                </div>
-            </div>
-        </section>
-
-        <section class="panel hidden estimator-panel" id="estimator-panel" data-panel="estimator">
-            <div class="card estimator-card">
-                <div class="tracking-header">
-                    <div>
-                        <h2>소포 행방 추정 <span class="beta-badge">베타</span></h2>
-                        <p>출발지와 도착지 공항 코드를 입력하면 항공 신호 데이터를 이용해 가능한 화물 운송 경로와 확률적 도착 시간을 추정합니다. 기존 추적 시스템과 독립적으로 동작하는 추정 엔진입니다.</p>
-                    </div>
-                    <div class="tracking-actions">
-                        <label>
-                            <span>출발 공항 (IATA)</span>
-                            <input type="text" id="estimator-origin" maxlength="3" placeholder="예: ICN" autocomplete="off">
-                        </label>
-                        <label>
-                            <span>도착 공항 (IATA)</span>
-                            <input type="text" id="estimator-dest" maxlength="3" placeholder="예: FRA" autocomplete="off">
-                        </label>
-                        <button type="button" id="estimator-run-btn">행방 추정 시작</button>
-                    </div>
-                </div>
-                <div class="tracking-body-actions">
-                    <div class="tracking-status" id="estimator-status">출발지와 도착지 IATA 코드를 입력하거나 지도에서 공항을 선택하세요.</div>
-                </div>
-
-                <div class="estimator-map-section">
-                    <div class="map-mode" id="estimator-map-mode">
-                        <button type="button" class="active" data-estimator-field="origin">출발 공항 지정</button>
-                        <button type="button" data-estimator-field="dest">도착 공항 지정</button>
-                    </div>
-                    <div id="estimator-map-wrapper">
-                        <div id="estimator-map"></div>
-                        <div id="estimator-map-loader">공항 데이터를 불러오는 중...</div>
-                    </div>
-                    <div class="selection-panel">
-                        <div class="selection-pill">출발: <strong id="estimator-selection-origin">--</strong></div>
-                        <div class="selection-pill">도착: <strong id="estimator-selection-dest">--</strong></div>
-                    </div>
-                    <div class="map-status" id="estimator-map-status">지도에서 공항을 클릭해 출발지/도착지를 지정하거나, 위 입력란에 직접 IATA 코드를 입력하세요.</div>
-                </div>
-
-                <div class="estimator-results" id="estimator-results">
-                    <section class="estimator-section" id="estimator-arrival-section">
-                        <h3>예상 도착 시간 창</h3>
-                        <div id="estimator-arrival-window">
-                            <div class="empty-state">추정 결과가 여기에 표시됩니다.</div>
-                        </div>
-                    </section>
-
-                    <section class="estimator-section" id="estimator-chart-section">
-                        <h3>확률 분포 그래프</h3>
-                        <canvas id="estimator-chart" width="720" height="200" style="width:100%;height:200px;border-radius:6px;"></canvas>
-                    </section>
-
-                    <section class="estimator-section" id="estimator-breakdown-section">
-                        <h3>지연 단계별 분석</h3>
-                        <div id="estimator-breakdown">
-                            <div class="empty-state">추정 후 단계별 분석이 표시됩니다.</div>
-                        </div>
-                    </section>
-
-                    <section class="estimator-section" id="estimator-candidates-section">
-                        <h3>상위 10개 후보 경로</h3>
-                        <div id="estimator-candidates">
-                            <div class="empty-state">추정 후 후보 경로가 표시됩니다.</div>
-                        </div>
-                    </section>
+                    <div class="empty-state">🚢 해운 경로 데이터베이스가 활성화되었습니다.<br>노선 검색 및 지도 탐색에서 해상 노드(sea)와 경로를 확인하실 수 있습니다.</div>
                 </div>
             </div>
         </section>
