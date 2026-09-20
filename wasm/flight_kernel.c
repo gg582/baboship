@@ -241,6 +241,7 @@ FK_EXPORT int fk_load_signal_data(const char *json) {
 /* Lookup airport by IATA code; returns NULL if not found.
  * IATA codes are always stored as uppercase, so strncmp is sufficient. */
 static const fk_airport_t *fk_find_airport(const char *iata) {
+    if (!iata) return NULL;
     for (int i = 0; i < g_airport_count; i++) {
         if (strncmp(g_airports[i].iata, iata, 3) == 0) {
             return &g_airports[i];

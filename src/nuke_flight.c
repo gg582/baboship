@@ -124,6 +124,14 @@ int nuke_store_load_from_blob(nuke_flight_store_t *store, const void *blob, size
         free(store->node_countries); free(store->node_layers); free(store->route_offsets);
         free(store->route_counts); free(store->adj_route_ids); free(store->adj_dst_indices);
         free(store->adj_distance); free(store->adj_route_layers);
+        // Null out the freed pointers and reset the counts so a failed load
+        // leaves the store in a safe state for later cleanup or reload
+        store->node_ids = NULL; store->node_lat = NULL; store->node_lon = NULL; store->node_codes = NULL;
+        store->node_countries = NULL; store->node_layers = NULL; store->route_offsets = NULL;
+        store->route_counts = NULL; store->adj_route_ids = NULL; store->adj_dst_indices = NULL;
+        store->adj_distance = NULL; store->adj_route_layers = NULL;
+        store->node_count = 0;
+        store->route_count = 0;
         return NUKE_ERR_INTERNAL;
     }
 
@@ -171,6 +179,14 @@ int nuke_store_load_from_blob(nuke_flight_store_t *store, const void *blob, size
     store->code_capacity = next_pow_two(store->node_count * 2);
     store->code_keys = calloc(store->code_capacity, sizeof(uint32_t));
     store->code_indices = malloc(sizeof(size_t) * store->code_capacity);
+    if (!store->code_keys || !store->code_indices) {
+        free(store->code_keys);
+        free(store->code_indices);
+        store->code_keys = NULL;
+        store->code_indices = NULL;
+        store->code_capacity = 0;
+        return NUKE_ERR_INTERNAL;
+    }
     memset(store->code_indices, 0xFF, sizeof(size_t) * store->code_capacity);
 
     for (size_t i = 0; i < store->node_count; ++i) {
@@ -584,6 +600,9 @@ void nuke_path_buffer_free(nuke_path_buffer_t *buffer) {
 static void append_result_locked(nuke_worker_group_t *group,
                                  const nuke_route_frame_t *frame,
                                  double total_distance) {
+    if (!group || !group->buffer || !group->buffer->items || !group->store || !frame) {
+        return;
+    }
     if (group->buffer->count >= group->buffer->capacity) {
         atomic_store(&group->stop, true);
         return;
@@ -663,7 +682,7 @@ static bool is_country_forbidden(const nuke_flight_store_t *store,
 
 static void worker_execute(void *arg) {
     nuke_worker_job_t *job = (nuke_worker_job_t *)arg;
-    if (!job || !job->group) {
+    if (!job || !job->group || !job->group->store) {
         ttak_mem_free(job);
         return;
     }
@@ -858,6 +877,7 @@ int nuke_search_routes(nuke_flight_store_t *store,
         for (size_t i = 0; i < degree; ++i) {
             if (atomic_load(&group.stop)) break;
             nuke_worker_job_t *pjob = malloc(sizeof(nuke_worker_job_t));
+            if (!pjob) break;
             pjob->group = &group;
             pjob->adj_index = start + i;
             worker_execute(pjob);

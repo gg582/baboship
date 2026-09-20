@@ -87,7 +87,7 @@ int nuke_wasm_init(void) {
 
 WASM_KEEPALIVE
 int nuke_wasm_load_data(const void *blob, size_t size) {
-    if (!g_initialized) nuke_wasm_init();
+    if (!g_initialized && nuke_wasm_init() != 0) return -3; // NUKE_ERR_INTERNAL
     extern int nuke_store_load_from_blob(nuke_flight_store_t *store, const void *blob, size_t size);
     return nuke_store_load_from_blob(&g_store, blob, size);
 }
@@ -151,6 +151,10 @@ WASM_KEEPALIVE
 const char* nuke_wasm_search_routes_json(const char *from, const char *to, int max_transfers) {
     if (!g_initialized) return "{\"error\":\"Not initialized\"}";
 
+    if (!from || !to) {
+        return "{\"error\":\"Invalid arguments\",\"results\":0,\"paths\":[]}";
+    }
+
     if (wasm_is_route_restricted(from, to)) {
         return "{\"error\":\"Restricted route\",\"results\":0,\"paths\":[]}";
     }
@@ -168,7 +172,9 @@ const char* nuke_wasm_search_routes_json(const char *from, const char *to, int m
     };
     
     nuke_path_buffer_t result_buffer;
-    nuke_path_buffer_init(&result_buffer, 10);
+    if (nuke_path_buffer_init(&result_buffer, 10) != 0) {
+        return "{\"error\":\"Memory allocation failed\",\"results\":0,\"paths\":[]}";
+    }
     
     int rc = nuke_search_routes(&g_store, &params, &result_buffer);
     
