@@ -2691,6 +2691,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- City Distance tab (도시 간 거리) ---
   const cityFromInput = document.getElementById('city-from');
   const cityToInput = document.getElementById('city-to');
+  const cityTraveledInput = document.getElementById('city-traveled');
   const cityComputeBtn = document.getElementById('city-compute-btn');
   const cityStatus = document.getElementById('city-status');
   const cityResults = document.getElementById('city-results');
@@ -2729,12 +2730,42 @@ document.addEventListener('DOMContentLoaded', () => {
     return `<div class="metric"><span>${title}</span><strong>${escapeHtml(hub.node.code)}${country}</strong><small>직선거리 약 ${hub.km.toFixed(1)} km</small></div>`;
   }
 
+  function renderCityProgressMetrics(distKm, traveledKm) {
+    if (traveledKm === null) return '';
+    const progressPct = distKm > 0 ? Math.min(100, (traveledKm / distKm) * 100) : 100;
+    const remainingKm = Math.max(0, distKm - traveledKm);
+    const traveledCard = `
+      <div class="metric"><span>이동 완료 거리</span><strong>${traveledKm.toFixed(1)} km</strong><small>전체의 ${progressPct.toFixed(0)}%</small></div>
+      <div class="metric"><span>잔여 거리</span><strong>${remainingKm.toFixed(1)} km</strong><small>전체 ${distKm.toFixed(1)} km 중</small></div>`;
+    let etaCard;
+    if (remainingKm <= 0) {
+      etaCard = `
+        <div class="metric"><span>잔여 예상 시간</span><strong>도착 임박</strong><small>배송 완료 단계로 보세요. 이동 완료 거리가 총 거리를 초과했습니다.</small></div>`;
+    } else {
+      const remainingHours = remainingKm / 850 + 0.75;
+      etaCard = `
+        <div class="metric"><span>잔여 예상 시간</span><strong>${formatHoursFriendly(remainingHours)}</strong><small>잔여 ${remainingKm.toFixed(1)} km / 850 km/h + 0.75 h</small></div>`;
+    }
+    return traveledCard + etaCard;
+  }
+
   async function handleCityCompute() {
     const fromQuery = (cityFromInput?.value || '').trim();
     const toQuery = (cityToInput?.value || '').trim();
     if (!fromQuery || !toQuery) {
       setCityStatus('출발·도착 도시를 모두 입력하세요.', 'error');
       return;
+    }
+    // Optional already-traveled distance: empty means "not provided".
+    const traveledRaw = (cityTraveledInput?.value || '').trim();
+    let traveledKm = null;
+    if (traveledRaw !== '') {
+      const parsed = Number(traveledRaw);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        setCityStatus('이동 완료 거리는 0 이상의 숫자로 입력하세요.', 'error');
+        return;
+      }
+      traveledKm = parsed;
     }
     setCityStatus('도시 데이터를 불러오는 중...');
     try {
@@ -2743,6 +2774,7 @@ document.addEventListener('DOMContentLoaded', () => {
       setCityStatus('도시 데이터 로드 실패: ' + err.message, 'error');
       return;
     }
+    // resolveCityRow normalizes case, so "daegu", "DAEGU", "iNcHeOn" all match.
     const fromRow = resolveCityRow(fromQuery);
     const toRow = resolveCityRow(toQuery);
     if (!fromRow) {
@@ -2755,6 +2787,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const distKm = haversineKm(fromRow[3], fromRow[4], toRow[3], toRow[4]);
     const flightHours = distKm / 850 + 0.75;
+    const remainingKm = traveledKm === null ? null : Math.max(0, distKm - traveledKm);
     const fromHub = state.nodes.length ? nearestAirHub(fromRow[3], fromRow[4]) : null;
     const toHub = state.nodes.length ? nearestAirHub(toRow[3], toRow[4]) : null;
     if (cityResults) {
@@ -2763,11 +2796,18 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="metric"><span>도착</span><strong>${escapeHtml(toRow[0])} (${escapeHtml(toRow[2])})</strong><small>${escapeHtml(formatPopulation(toRow[5]))}</small></div>
         <div class="metric"><span>대원 거리</span><strong>${distKm.toFixed(1)} km</strong><small>haversine, 지구 반경 6371 km</small></div>
         <div class="metric"><span>예상 비행 시간</span><strong>${flightHours.toFixed(2)} 시간</strong><small>거리/850 km/h + 0.75 h</small></div>
+        ${renderCityProgressMetrics(distKm, traveledKm)}
         ${renderCityHubMetric(fromRow, fromHub)}
         ${renderCityHubMetric(toRow, toHub)}
       `;
     }
-    setCityStatus(`${fromRow[0]} (${fromRow[2]}) → ${toRow[0]} (${toRow[2]}): ${distKm.toFixed(1)} km`, 'success');
+    let summary = `${fromRow[0]} (${fromRow[2]}) → ${toRow[0]} (${toRow[2]}): ${distKm.toFixed(1)} km`;
+    if (remainingKm !== null) {
+      summary += remainingKm > 0
+        ? ` · 잔여 ${remainingKm.toFixed(1)} km`
+        : ' · 도착 임박 (잔여 0 km)';
+    }
+    setCityStatus(summary, 'success');
   }
 
   if (cityFromInput) cityFromInput.addEventListener('input', () => refreshCityDatalist(cityFromInput.value));
@@ -3179,8 +3219,21 @@ function searchCityRows(query, limit = CITY_SUGGESTION_LIMIT) {
 }
 
 function resolveCityRow(query) {
-  const matches = searchCityRows(query, 1);
+  // Normalized entry point: matching is fully case-insensitive (trim + lowercase).
+  const normalized = String(query || '').trim().toLowerCase();
+  if (!normalized) return null;
+  const matches = searchCityRows(normalized, 1);
   return matches.length ? matches[0] : null;
+}
+
+// Human-friendly Korean duration, e.g. 0.92h -> "약 55분", 2.5h -> "약 2시간 30분".
+function formatHoursFriendly(hours) {
+  const totalMinutes = Math.max(0, Math.round(hours * 60));
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  if (h === 0) return `약 ${m}분`;
+  if (m === 0) return `약 ${h}시간`;
+  return `약 ${h}시간 ${m}분`;
 }
 
 function formatPopulation(pop) {
