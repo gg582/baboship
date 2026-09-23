@@ -146,6 +146,7 @@ const assetPaths = {
   wasmBlob: resolveAsset('wasm/nuke_blob.bin'),
   workerScript: resolveAsset('best-worker.js'),
   // airportsJson: resolveAsset('airports.json'), // Removed - now fetched via WASM kernel
+  citiesJson: resolveAsset('cities.json'),
   serviceWorker: resolveAsset('sw.js')
 };
 
@@ -1353,6 +1354,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const trackingDestinationSelect = document.getElementById('tracking-destination-iso');
   const maritimePanel = document.getElementById('maritime-panel');
   const estimatorPanel = document.getElementById('estimator-panel');
+  const cityPanel = document.getElementById('city-panel');
 
   let estimatorTab = null; // API returned by initEstimatorTab
 
@@ -1598,6 +1600,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (trackingPanel) trackingPanel.classList.toggle('hidden', mode !== 'tracking');
     if (maritimePanel) maritimePanel.classList.toggle('hidden', mode !== 'maritime');
     if (estimatorPanel) estimatorPanel.classList.toggle('hidden', mode !== 'estimator');
+    if (cityPanel) cityPanel.classList.toggle('hidden', mode !== 'city');
+    if (mode === 'city') preloadCityData();
     
     // Trigger map resize when panel becomes visible
     if (mainMapLibre) mainMapLibre.resize();
@@ -2683,6 +2687,92 @@ document.addEventListener('DOMContentLoaded', () => {
   mapModeButtons.forEach(b => b.addEventListener('click', () => { mapModeButtons.forEach(x => x.classList.remove('active')); b.classList.add('active'); state.activeField = b.dataset.field; }));
   searchBtn.addEventListener('click', () => { searchRoutes().catch(err => console.error(err)); });
   modeTabs.forEach(tab => tab.addEventListener('click', () => setActivePanel(tab.dataset.modeTab || 'manual')));
+
+  // --- City Distance tab (도시 간 거리) ---
+  const cityFromInput = document.getElementById('city-from');
+  const cityToInput = document.getElementById('city-to');
+  const cityComputeBtn = document.getElementById('city-compute-btn');
+  const cityStatus = document.getElementById('city-status');
+  const cityResults = document.getElementById('city-results');
+  const cityDatalist = document.getElementById('city-suggestions');
+
+  function setCityStatus(message, variant = 'info') {
+    if (!cityStatus) return;
+    cityStatus.textContent = message;
+    cityStatus.classList.remove('error', 'success');
+    if (variant === 'error') cityStatus.classList.add('error');
+    if (variant === 'success') cityStatus.classList.add('success');
+  }
+
+  function preloadCityData() {
+    loadCityData().catch((err) => {
+      console.warn('City data preload failed:', err);
+      setCityStatus('도시 데이터를 미리 불러오지 못했습니다: ' + err.message, 'error');
+    });
+  }
+
+  function refreshCityDatalist(query) {
+    if (!cityDatalist) return;
+    const rows = searchCityRows(query, CITY_SUGGESTION_LIMIT);
+    cityDatalist.innerHTML = rows.map((row) => {
+      const label = `${row[0]}, ${row[2]}`;
+      return `<option value="${escapeHtml(row[0])}" label="${escapeHtml(label)}">${escapeHtml(label)}</option>`;
+    }).join('');
+  }
+
+  function renderCityHubMetric(cityRow, hub) {
+    const title = `${escapeHtml(cityRow[0])} 최근접 항공 허브`;
+    if (!hub) {
+      return `<div class="metric"><span>${title}</span><strong>--</strong><small>노드 데이터가 아직 로드되지 않았습니다.</small></div>`;
+    }
+    const country = hub.node.country ? ` (${escapeHtml(hub.node.country)})` : '';
+    return `<div class="metric"><span>${title}</span><strong>${escapeHtml(hub.node.code)}${country}</strong><small>직선거리 약 ${hub.km.toFixed(1)} km</small></div>`;
+  }
+
+  async function handleCityCompute() {
+    const fromQuery = (cityFromInput?.value || '').trim();
+    const toQuery = (cityToInput?.value || '').trim();
+    if (!fromQuery || !toQuery) {
+      setCityStatus('출발·도착 도시를 모두 입력하세요.', 'error');
+      return;
+    }
+    setCityStatus('도시 데이터를 불러오는 중...');
+    try {
+      await loadCityData();
+    } catch (err) {
+      setCityStatus('도시 데이터 로드 실패: ' + err.message, 'error');
+      return;
+    }
+    const fromRow = resolveCityRow(fromQuery);
+    const toRow = resolveCityRow(toQuery);
+    if (!fromRow) {
+      setCityStatus(`출발 도시를 찾지 못했습니다: ${fromQuery}`, 'error');
+      return;
+    }
+    if (!toRow) {
+      setCityStatus(`도착 도시를 찾지 못했습니다: ${toQuery}`, 'error');
+      return;
+    }
+    const distKm = haversineKm(fromRow[3], fromRow[4], toRow[3], toRow[4]);
+    const flightHours = distKm / 850 + 0.75;
+    const fromHub = state.nodes.length ? nearestAirHub(fromRow[3], fromRow[4]) : null;
+    const toHub = state.nodes.length ? nearestAirHub(toRow[3], toRow[4]) : null;
+    if (cityResults) {
+      cityResults.innerHTML = `
+        <div class="metric"><span>출발</span><strong>${escapeHtml(fromRow[0])} (${escapeHtml(fromRow[2])})</strong><small>${escapeHtml(formatPopulation(fromRow[5]))}</small></div>
+        <div class="metric"><span>도착</span><strong>${escapeHtml(toRow[0])} (${escapeHtml(toRow[2])})</strong><small>${escapeHtml(formatPopulation(toRow[5]))}</small></div>
+        <div class="metric"><span>대원 거리</span><strong>${distKm.toFixed(1)} km</strong><small>haversine, 지구 반경 6371 km</small></div>
+        <div class="metric"><span>예상 비행 시간</span><strong>${flightHours.toFixed(2)} 시간</strong><small>거리/850 km/h + 0.75 h</small></div>
+        ${renderCityHubMetric(fromRow, fromHub)}
+        ${renderCityHubMetric(toRow, toHub)}
+      `;
+    }
+    setCityStatus(`${fromRow[0]} (${fromRow[2]}) → ${toRow[0]} (${toRow[2]}): ${distKm.toFixed(1)} km`, 'success');
+  }
+
+  if (cityFromInput) cityFromInput.addEventListener('input', () => refreshCityDatalist(cityFromInput.value));
+  if (cityToInput) cityToInput.addEventListener('input', () => refreshCityDatalist(cityToInput.value));
+  if (cityComputeBtn) cityComputeBtn.addEventListener('click', () => { handleCityCompute().catch(err => console.error(err)); });
   if (trackingFetchBtnIntl) trackingFetchBtnIntl.addEventListener('click', () => { handleTrackingFetchIntl().catch(err => console.error(err)); });
   if (trackingAnalyzeBtnIntl && trackingLogInputIntl) trackingAnalyzeBtnIntl.addEventListener('click', () => { runTrackingAnalysisIntl(trackingLogInputIntl.value).catch(err => console.error(err)); });
 
@@ -3029,6 +3119,91 @@ function haversineKm(lat1, lon1, lat2, lon2) {
               Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
               Math.sin(dLon / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ─── City Distance tab (GeoNames cities500 gazetteer, CC-BY 4.0) ────────
+// City rows are stored as: [name, ascii_name, country_code, lat, lon, population]
+const cityState = {
+  data: null,
+  loadingPromise: null
+};
+
+const CITY_SUGGESTION_LIMIT = 50;
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function loadCityData() {
+  if (cityState.data) return Promise.resolve(cityState.data);
+  if (!cityState.loadingPromise) {
+    cityState.loadingPromise = fetch(assetPaths.citiesJson)
+      .then((response) => {
+        if (!response.ok) throw new Error('도시 데이터 요청 실패 (' + response.status + ')');
+        return response.json();
+      })
+      .then((payload) => {
+        cityState.data = payload;
+        return payload;
+      })
+      .catch((err) => {
+        cityState.loadingPromise = null;
+        throw err;
+      });
+  }
+  return cityState.loadingPromise;
+}
+
+// Ranked city search: exact name match first, then prefix, then substring.
+// Rows are population-sorted in the source file, so slices stay pop-ordered.
+function searchCityRows(query, limit = CITY_SUGGESTION_LIMIT) {
+  if (!cityState.data) return [];
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const exact = [];
+  const prefix = [];
+  const substring = [];
+  for (const row of cityState.data.cities) {
+    const name = (row[0] || '').toLowerCase();
+    const ascii = (row[1] || '').toLowerCase();
+    if (name === q || ascii === q) exact.push(row);
+    else if (name.startsWith(q) || ascii.startsWith(q)) prefix.push(row);
+    else if (name.includes(q) || ascii.includes(q)) substring.push(row);
+  }
+  return exact.concat(prefix, substring).slice(0, limit);
+}
+
+function resolveCityRow(query) {
+  const matches = searchCityRows(query, 1);
+  return matches.length ? matches[0] : null;
+}
+
+function formatPopulation(pop) {
+  if (!pop || pop < 10000) return '';
+  if (pop >= 1000000) return '인구 약 ' + (pop / 1000000).toFixed(1) + '백만';
+  return '인구 약 ' + Math.round(pop / 1000) + '천';
+}
+
+// Nearest air hub node from the already-loaded node graph (WASM blob).
+function nearestAirHub(lat, lon) {
+  const airNodes = state.nodes.filter((n) => (n.layer || 'air') === 'air');
+  const pool = airNodes.length ? airNodes : state.nodes;
+  let bestNode = null;
+  let bestKm = Infinity;
+  for (const n of pool) {
+    if (typeof n.lat !== 'number' || typeof n.lon !== 'number') continue;
+    const d = haversineKm(lat, lon, n.lat, n.lon);
+    if (d < bestKm) {
+      bestKm = d;
+      bestNode = n;
+    }
+  }
+  return bestNode ? { node: bestNode, km: bestKm } : null;
 }
 
 // Hardcoded route restrictions (mirrors server-side logistics_restrictions)

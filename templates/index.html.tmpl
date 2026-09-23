@@ -26,6 +26,7 @@
                 <button type="button" class="mode-tab active" data-mode-tab="tracking" role="tab" aria-controls="tracking-panel" aria-selected="true">EMS 경로 효율</button>
                 <button type="button" class="mode-tab" data-mode-tab="manual" role="tab" aria-controls="manual-panel" aria-selected="false">수동으로 공항 선택</button>
                 <button type="button" class="mode-tab mode-tab-beta" data-mode-tab="maritime" role="tab" aria-controls="maritime-panel" aria-selected="false" title="해운 경로는 실험적 기능입니다. 데이터 정확도가 항공 데이터보다 낮을 수 있습니다.">해운 경로 <span class="beta-badge">베타</span></button>
+                <button type="button" class="mode-tab" data-mode-tab="city" role="tab" aria-controls="city-panel" aria-selected="false">도시 간 거리</button>
             </div>
         </header>
 
@@ -260,6 +261,36 @@
                         <div id="maritime-route-results" style="margin-top:1rem;"><div class="empty-state">경로 탐색 결과가 여기에 표시됩니다.</div></div>
                     </div>
                 </details>
+            </div>
+        </section>
+
+        <section class="panel hidden city-panel" id="city-panel" data-panel="city">
+            <div class="card city-card">
+                <div class="tracking-header">
+                    <div>
+                        <h2>도시 간 거리 측정</h2>
+                        <p>전 세계 도시 이름을 입력하면 대원 거리와 예상 비행 시간, 각 도시에서 가장 가까운 항공 물류 허브를 계산합니다.</p>
+                    </div>
+                </div>
+                <div class="form-grid">
+                    <label>
+                        <span>출발 도시</span>
+                        <input type="text" id="city-from" list="city-suggestions" placeholder="예: Daegu" autocomplete="off">
+                    </label>
+                    <label>
+                        <span>도착 도시</span>
+                        <input type="text" id="city-to" list="city-suggestions" placeholder="예: Incheon" autocomplete="off">
+                    </label>
+                </div>
+                <datalist id="city-suggestions"></datalist>
+                <div class="form-actions">
+                    <button type="button" id="city-compute-btn">거리 계산</button>
+                </div>
+                <div class="tracking-status" id="city-status">도시 이름을 입력하고 계산 버튼을 누르세요.</div>
+                <div class="tracking-metrics" id="city-results">
+                    <div class="empty-state">계산 결과가 여기에 표시됩니다.</div>
+                </div>
+                <p class="city-attribution" style="margin-top:0.75rem;font-size:0.78rem;color:var(--muted);">City data © GeoNames, CC-BY 4.0</p>
             </div>
         </section>
     </div>

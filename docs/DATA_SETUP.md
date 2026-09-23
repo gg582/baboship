@@ -47,3 +47,17 @@ python3 scripts/create_sample_db.py   # data/nuke_routes.db 재생성
 - `data/meta.db` : CWIST 일반 DB로, 검색 감사 로그 및 설정 같은 소용량 메타데이터만 저장합니다. 서버 실행 시 자동 생성되므로 직접 준비할 필요가 없습니다.
 
 두 파일 모두 동일한 `data/` 디렉터리 아래에 두면, `nukedb_app`이 용량에 맞춰 적절한 엔진(CWIST 일반 DB ↔ NukeDB)을 선택해 사용합니다.
+
+## 4. 도시 간 거리 데이터 (GeoNames cities500)
+
+"도시 간 거리" 탭은 **GeoNames** `cities500` 덤프(CC-BY 4.0)를 사용해 전 세계 인구 1만 이상 도시의 대원 거리와 예상 비행 시간, 최근접 항공 물류 허브를 계산합니다.
+
+```bash
+python3 scripts/ingest_cities.py   # data/raw/cities500.zip 날려받기 + docs/cities.json 생성
+```
+
+- 소스: [https://download.geonames.org/export/dump/cities500.zip](https://download.geonames.org/export/dump/cities500.zip) (이미 존재하면 재다운로드하지 않으며, `--force`로 갱신)
+- 산출물: `docs/cities.json` — 형식 `{"source","updated","cities":[[name, ascii_name, country_code, lat, lon, population], ...]}` (인구 내림차순, 좌표 소수점 4자리)
+- `generate_all.sh` 실행 시 위 수집 단계가 OpenFlights/해운 수집 이후에 자동으로 실행됩니다.
+- 귀속(Attribution): GeoNames, CC-BY 4.0 — UI의 "City data © GeoNames, CC-BY 4.0" 문구를 제거하지 마십시오.
+

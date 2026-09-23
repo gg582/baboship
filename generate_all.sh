@@ -80,6 +80,11 @@ else
   log "[skip] Maritime data ingestion skipped (pass --with-maritime to enable beta)"
 fi
 
+log "Ingesting GeoNames city gazetteer (CC-BY 4.0)"
+run_py scripts/ingest_cities.py \
+  --source data/raw/cities500.zip \
+  --output docs/cities.json
+
 log "Exporting airports for static dashboard"
 run_py scripts/export_airports_json.py data/nuke_routes.db docs/airports.json
 
