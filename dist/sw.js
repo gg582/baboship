@@ -1,19 +1,4 @@
-/* WASM Server Service Worker */
-import createNukeKernel from './wasm/nuke_kernel.js';
-
-let kernel = null;
-let kernelPromise = null;
-
-async function getKernel() {
-  if (kernel) return kernel;
-  if (!kernelPromise) {
-    kernelPromise = createNukeKernel({
-      locateFile: (path) => `./wasm/${path}`
-    });
-  }
-  kernel = await kernelPromise;
-  return kernel;
-}
+/* WASM Server Service Worker - Witty Interception */
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -23,67 +8,45 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
-async function handleRequest(endpoint, url, request) {
+async function handleAirports(url) {
+  const limit = parseInt(url.searchParams.get('limit')) || 8192;
+  const offset = parseInt(url.searchParams.get('offset')) || 0;
+  
   try {
-    if (endpoint.endsWith('/best')) {
-      const k = await getKernel();
-      const jsonPtr = k._nuke_wasm_get_best_nodes_json();
-      const jsonStr = k.UTF8ToString(jsonPtr);
-      return new Response(jsonStr, {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
+    const response = await fetch('./airports.json');
+    const allAirports = await response.json();
+    const sliced = allAirports.slice(offset, offset + limit);
     
-    if (endpoint.endsWith('/health')) {
-      return new Response(JSON.stringify({
-        status: 'online',
-        wasm: true,
-        worker: 'ServiceWorker'
-      }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    if (endpoint.endsWith('/airports')) {
-      const k = await getKernel();
-      const jsonPtr = k._nuke_wasm_get_airports_json();
-      const jsonStr = k.UTF8ToString(jsonPtr);
-      return new Response(jsonStr, {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    if (endpoint.endsWith('/routes')) {
-      return new Response(JSON.stringify({
-        error: 'Route calculation requires NukeDB server.',
-        paths: []
-      }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
+    return new Response(JSON.stringify({
+      total: allAirports.length,
+      offset: offset,
+      returned: sliced.length,
+      airports: sliced
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
   } catch (err) {
-    return new Response(JSON.stringify({ error: err.message }), {
+    return new Response(JSON.stringify({ error: 'Failed to load airports.json' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     });
   }
-  
-  return fetch(request);
 }
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   const scope = self.registration.scope;
-  const relativePath = url.pathname.startsWith(scope) 
-    ? '/' + url.pathname.slice(scope.length)
-    : url.pathname;
   
-  // Only intercept requests to our mock endpoints
-  const endpoints = ['/best', '/health', '/airports', '/routes'];
-  const endpoint = endpoints.find(e => relativePath === e || relativePath === e + '/');
-  
-  if (endpoint) {
-    event.respondWith(handleRequest(endpoint, url, event.request));
+  // Normalize path relative to scope
+  let path = url.pathname;
+  if (path.startsWith(new URL(scope).pathname)) {
+    path = '/' + path.slice(new URL(scope).pathname.length);
   }
+  path = path.replace(/\/+$/, ''); // remove trailing slash
+
+  if (path === '/airports') {
+    event.respondWith(handleAirports(url));
+  }
+  // All other requests (wasm files, static assets, etc.) are handled by the
+  // browser's default fetch – no event.respondWith() call needed.
 });

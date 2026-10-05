@@ -8,13 +8,67 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="app.css">
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.css">
+    <script>
+        window.__baboship_config = window.__baboship_config || {};
+        window.__baboship_config.trackerApiBase = 'https://apis.tracker.delivery';
+        window.__baboship_config.trackerApiKey = '';
+    </script>
 </head>
 <body class="app-shell">
-    <main class="layout">
-        <section class="card hero-card">
-            <div class="pill">Global Freight Control</div>
-            <h1>바보쉽 라우트 콘솔</h1>
-            <p>실시간 항로 지표와 통제된 규제를 결합해, 배송 최단 시간 경로를 한 화면에서 설계하세요.</p>
+    <div class="app-container">
+        <header class="app-header">
+            <div class="brand">
+                <strong>바보쉽 물류 콘솔</strong>
+                <p>우체국 송장 추적과 공항 경로 설계를 한 화면에서 전환하세요.</p>
+            </div>
+            <div class="mode-tabs" role="tablist" aria-label="화물 분석 모드">
+                <button type="button" class="mode-tab active" data-mode-tab="tracking" role="tab" aria-controls="tracking-panel" aria-selected="true">EMS 경로 효율</button>
+                <button type="button" class="mode-tab" data-mode-tab="manual" role="tab" aria-controls="manual-panel" aria-selected="false">수동으로 공항 선택</button>
+                <button type="button" class="mode-tab mode-tab-beta" data-mode-tab="maritime" role="tab" aria-controls="maritime-panel" aria-selected="false" title="해운 경로는 실험적 기능입니다. 데이터 정확도가 항공 데이터보다 낮을 수 있습니다.">해운 경로 <span class="beta-badge">베타</span></button>
+                <button type="button" class="mode-tab" data-mode-tab="city" role="tab" aria-controls="city-panel" aria-selected="false">도시 간 거리</button>
+            </div>
+        </header>
+
+        <section class="panel tracking-panel" id="tracking-panel" data-panel="tracking">
+            <div class="card tracking-card">
+                <div class="tracking-header">
+                    <div>
+                        <h2>EMS 경로 효율 분석</h2>
+                        <p>송장 번호를 입력하면 한국 우체국 EMS 이벤트를 불러와 WebAssembly 엔진과 운송 휴리스틱으로 경로 효율과 예상 완료일을 계산합니다.</p>
+                    </div>
+                    <div class="tracking-actions">
+                        <label>
+                            <span>송장번호</span>
+                            <input type="text" id="tracking-number" placeholder="예: EG123456789KR" autocomplete="off">
+                        </label>
+                        <button type="button" id="tracking-fetch-btn">우체국에서 불러오기</button>
+                    </div>
+                </div>
+                <div class="tracking-body">
+                    <label class="log-input">
+                        <span>이벤트 원문 (직접 붙여넣기 가능)</span>
+                        <textarea id="tracking-log-input" rows="5" placeholder="API 응답 JSON이나 텍스트 로그를 붙여넣으면 자동으로 분석됩니다."></textarea>
+                    </label>
+                    <div class="tracking-body-actions">
+                        <button type="button" id="tracking-analyze-btn">경로 분석</button>
+                        <div class="tracking-status" id="tracking-status">송장번호를 입력하거나 이벤트 문자열을 붙여넣으세요.</div>
+                    </div>
+                </div>
+                <div class="tracking-metrics" id="tracking-metrics">
+                    <div class="empty-state">분석 결과가 여기에 표시됩니다.</div>
+                </div>
+                <div class="tracking-timeline" id="tracking-timeline">
+                    <div class="empty-state">우체국 이벤트를 불러오면 경로가 시간순으로 나타납니다.</div>
+                </div>
+            </div>
+        </section>
+
+        <main class="layout panel hidden manual-panel" id="manual-panel" data-panel="manual">
+            <section class="card hero-card">
+                <div class="pill">Global Freight Control</div>
+                <h1>바보쉽 라우트 콘솔</h1>
+                <p>실시간 항로 지표와 통제된 규제를 결합해, 배송 최단 시간 경로를 한 화면에서 설계하세요.</p>
             <div class="stat-grid">
                 <div class="stat">
                     <div class="label">공항 수</div>
@@ -86,7 +140,7 @@
             <div id="route-results"></div>
         </section>
 
-        <section class="card best-card" id="best-from-section" style="display:none;">
+        <section class="card best-card" id="best-from-section">
             <div class="results-header">
                 <h2 id="best-from-title">출발 공항에서 최적 목적지</h2>
                 <div class="best-controls">
@@ -103,10 +157,10 @@
                     <button type="button" id="best-from-refresh-btn">최적 목적지 찾기</button>
                 </div>
             </div>
-            <div id="best-from-results"></div>
+            <div id="best-from-results"><div class="empty-state">아직 최적 경로를 검색하지 않았습니다. 버튼을 눌러서 검색하세요.</div></div>
         </section>
 
-        <section class="card best-card" id="best-to-section" style="display:none;">
+        <section class="card best-card" id="best-to-section">
             <div class="results-header">
                 <h2 id="best-to-title">도착 공항에서 최적 목적지</h2>
                 <div class="best-controls">
@@ -123,15 +177,134 @@
                     <button type="button" id="best-to-refresh-btn">최적 목적지 찾기</button>
                 </div>
             </div>
-            <div id="best-to-results"></div>
+            <div id="best-to-results"><div class="empty-state">아직 최적 경로를 검색하지 않았습니다. 버튼을 눌러서 검색하세요.</div></div>
         </section>
-    </main>
+        </main>
+
+        <section class="panel hidden maritime-panel" id="maritime-panel" data-panel="maritime">
+            <div class="card maritime-card">
+                <div class="tracking-header">
+                    <div>
+                        <h2>해운 경로 탐색 <span class="beta-badge">베타</span></h2>
+                        <p>해운 레인 데이터를 기반으로 해상 운송 경로를 분석합니다. 선편 소포 송장을 입력하거나 노선을 직접 검색하세요.</p>
+                        <ul class="beta-notes">
+                            <li>해운 데이터는 글로벌 주요 항로만 포함하며 정기선 시간표는 반영되지 않습니다.</li>
+                            <li>항구 코드(IATA 형식 아님)가 표시될 수 있으며, 정확한 항구명 매핑이 제한적입니다.</li>
+                            <li>해운 데이터베이스가 기본 활성화되어 총 375개 해상 노드 및 239개 해운 경로가 통합되었습니다.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <details class="advanced-settings maritime-input-section" open>
+                    <summary>📦 선편 소포 · 해운 화물 추적</summary>
+                    <div class="advanced-settings-body">
+                        <div class="tracking-actions" style="flex-wrap:wrap;gap:0.75rem;align-items:flex-end;">
+                            <label style="flex:1;min-width:220px;">
+                                <span>송장 / B/L 번호</span>
+                                <input type="text" id="maritime-tracking-number" placeholder="예: CP123456789KR 또는 B/L 번호" autocomplete="off" style="font-size:1rem;">
+                            </label>
+                            <button type="button" id="maritime-fetch-btn">우체국에서 불러오기</button>
+                        </div>
+                        <div class="maritime-invoice-guide" style="margin-top:1rem;padding:0.9rem 1rem;background:var(--input-bg);border:1px solid var(--card-border);border-radius:6px;font-size:0.84rem;line-height:1.7;color:var(--muted);">
+                            <strong style="color:var(--text);">송장 번호 형식 안내</strong>
+                            <table style="margin-top:0.5rem;width:100%;border-collapse:collapse;">
+                                <thead>
+                                    <tr style="border-bottom:1px solid var(--card-border);">
+                                        <th style="text-align:left;padding:0.3rem 0.5rem;font-weight:600;color:var(--text);">운송 유형</th>
+                                        <th style="text-align:left;padding:0.3rem 0.5rem;font-weight:600;color:var(--text);">식별자 형식</th>
+                                        <th style="text-align:left;padding:0.3rem 0.5rem;font-weight:600;color:var(--text);">예시</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr style="border-bottom:1px solid var(--card-border);">
+                                        <td style="padding:0.3rem 0.5rem;">🚢 선편 소포 (우체국)</td>
+                                        <td style="padding:0.3rem 0.5rem;">UPU S10 (CP/CX/CC...KR)</td>
+                                        <td style="padding:0.3rem 0.5rem;font-family:monospace;">CP123456789KR</td>
+                                    </tr>
+                                    <tr style="border-bottom:1px solid var(--card-border);">
+                                        <td style="padding:0.3rem 0.5rem;">🛳️ 컨테이너 화물</td>
+                                        <td style="padding:0.3rem 0.5rem;">ISO 6346 (4자 + 7숫자)</td>
+                                        <td style="padding:0.3rem 0.5rem;font-family:monospace;">MSKU1234567</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding:0.3rem 0.5rem;">📄 선하증권 (B/L)</td>
+                                        <td style="padding:0.3rem 0.5rem;">선사별 상이 (HMM, Maersk 등)</td>
+                                        <td style="padding:0.3rem 0.5rem;font-family:monospace;">HMM-B/L 번호</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            <p style="margin-top:0.6rem;">💡 <strong>우체국 연동</strong>은 선편 소포(CP, CX, CC 등으로 시작하는 13자 UPU S10 번호)만 지원합니다. 컨테이너/B/L은 각 선사 홈페이지나 유니패스에서 확인하세요.</p>
+                        </div>
+                        <div class="tracking-status" id="maritime-tracking-status" style="margin-top:0.75rem;">송장번호를 입력하고 조회하세요.</div>
+                        <div class="tracking-timeline" id="maritime-tracking-timeline" style="margin-top:1rem;">
+                            <div class="empty-state">조회 결과가 여기에 표시됩니다.</div>
+                        </div>
+                    </div>
+                </details>
+
+                <details class="advanced-settings" style="margin-top:1rem;">
+                    <summary>🗺️ 해운 노선 직접 검색</summary>
+                    <div class="advanced-settings-body">
+                        <p style="font-size:0.875rem;color:var(--muted);margin-bottom:1rem;">해상 노드 코드를 직접 입력해 경로를 탐색합니다. 항공 경로 탐색과 동일하게 WASM 엔진을 사용합니다.</p>
+                        <div class="form-grid" style="gap:0.75rem;">
+                            <label>
+                                <span>출발 항구 코드</span>
+                                <input type="text" maxlength="7" placeholder="예: SGSIN" id="maritime-from-code" style="text-transform:uppercase;">
+                            </label>
+                            <label>
+                                <span>도착 항구 코드</span>
+                                <input type="text" maxlength="7" placeholder="예: JPTYO" id="maritime-to-code" style="text-transform:uppercase;">
+                            </label>
+                        </div>
+                        <button type="button" id="maritime-search-btn" style="margin-top:0.75rem;">해운 경로 탐색</button>
+                        <div class="tracking-status" id="maritime-route-status" style="margin-top:0.75rem;"></div>
+                        <div id="maritime-route-results" style="margin-top:1rem;"><div class="empty-state">경로 탐색 결과가 여기에 표시됩니다.</div></div>
+                    </div>
+                </details>
+            </div>
+        </section>
+
+        <section class="panel hidden city-panel" id="city-panel" data-panel="city">
+            <div class="card city-card">
+                <div class="tracking-header">
+                    <div>
+                        <h2>도시 간 거리 측정</h2>
+                        <p>전 세계 도시 이름을 입력하면 대원 거리와 예상 비행 시간, 각 도시에서 가장 가까운 항공 물류 허브를 계산합니다.</p>
+                    </div>
+                </div>
+                <div class="form-grid">
+                    <label>
+                        <span>출발 도시</span>
+                        <input type="text" id="city-from" list="city-suggestions" placeholder="예: Daegu" autocomplete="off">
+                    </label>
+                    <label>
+                        <span>도착 도시</span>
+                        <input type="text" id="city-to" list="city-suggestions" placeholder="예: Incheon" autocomplete="off">
+                    </label>
+                    <label>
+                        <span>이동 완료 거리 (km, 선택)</span>
+                        <input type="number" min="0" step="any" id="city-traveled" placeholder="예: 100" autocomplete="off">
+                    </label>
+                </div>
+                <datalist id="city-suggestions"></datalist>
+                <div class="form-actions">
+                    <button type="button" id="city-compute-btn">거리 계산</button>
+                </div>
+                <div class="tracking-status" id="city-status">도시 이름을 입력하고 계산 버튼을 누르세요.</div>
+                <div class="tracking-metrics" id="city-results">
+                    <div class="empty-state">계산 결과가 여기에 표시됩니다.</div>
+                </div>
+                <p class="city-attribution" style="margin-top:0.75rem;font-size:0.78rem;color:var(--muted);">City data © GeoNames, CC-BY 4.0</p>
+            </div>
+        </section>
+    </div>
     <div id="map-modal" class="map-modal" aria-hidden="true">
         <div class="map-modal-content">
             <button type="button" class="map-modal-close" id="map-modal-close" aria-label="크게보기 닫기">X</button>
             <div id="map-container-large" class="map-canvas" role="application" aria-label="확대 공항 경로 지도"></div>
         </div>
     </div>
+    <script src="https://unpkg.com/maplibre-gl@3.6.1/dist/maplibre-gl.js" defer></script>
     <script src="app.js" type="module" defer></script>
 </body>
 </html>
