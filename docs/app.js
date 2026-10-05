@@ -164,8 +164,34 @@ const OPENSKY_API_BASE = 'https://opensky-network.org/api';
 // How far back to look when querying OpenSky arrivals (seconds).
 const OPENSKY_LOOKBACK_SECONDS = 12 * 3600; // 12 hours
 
+// Flight speed profile — keep in sync with FK_* constants in wasm/flight_kernel.c.
+// Block time = fixed ground overhead + cruise at a distance-dependent speed.
+const FLIGHT_PROFILE = {
+  overheadHours: 0.5,   // taxi + takeoff + approach/landing
+  cruiseShortKmh: 650,  // effective block speed, short haul
+  cruiseLongKmh: 880,   // long-haul wide-body cruise
+  profileShortKm: 500,  // below: constant short-haul speed
+  profileLongKm: 2500   // above: constant long-haul speed
+};
+
+// Distance-based flight block time (hours); mirrors fk_flight_hours() in wasm/flight_kernel.c
+function flightBlockHours(distKm) {
+  if (!Number.isFinite(distKm) || distKm <= 0) return FLIGHT_PROFILE.overheadHours;
+  let cruise;
+  if (distKm <= FLIGHT_PROFILE.profileShortKm) {
+    cruise = FLIGHT_PROFILE.cruiseShortKmh;
+  } else if (distKm >= FLIGHT_PROFILE.profileLongKm) {
+    cruise = FLIGHT_PROFILE.cruiseLongKmh;
+  } else {
+    const t = (distKm - FLIGHT_PROFILE.profileShortKm) /
+              (FLIGHT_PROFILE.profileLongKm - FLIGHT_PROFILE.profileShortKm);
+    cruise = FLIGHT_PROFILE.cruiseShortKmh +
+             t * (FLIGHT_PROFILE.cruiseLongKmh - FLIGHT_PROFILE.cruiseShortKmh);
+  }
+  return distKm / cruise + FLIGHT_PROFILE.overheadHours;
+}
+
 const TRANSPORT_SPEED_KMH = {
-  air: 550,
   sea: 36,
   land: 65
 };
@@ -1998,8 +2024,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (!Number.isFinite(remainingDistance)) remainingDistance = 0;
     const futureMode = determineFutureMode(lastEvent, destination, events);
-    const speed = TRANSPORT_SPEED_KMH[futureMode] || TRANSPORT_SPEED_KMH.air;
-    const remainingTravelHours = remainingDistance > 5 ? (remainingDistance / speed) : 0;
+    const speed = TRANSPORT_SPEED_KMH[futureMode];
+    const remainingTravelHours = remainingDistance > 5
+      ? (futureMode === 'air' ? flightBlockHours(remainingDistance)
+                              : remainingDistance / speed)
+      : 0;
     const processingHours = computePendingProcessingHours(lastEvent);
     const destinationCustomsHours = computePendingDestinationCustomsHours(events, lastEvent, destination.iso);
     let lastMileHours = determineLastMileHours(destination.iso, lastEvent.countryCode);

@@ -548,6 +548,19 @@ export async function initEstimatorTab(runRouteSearch, options = {}) {
     const k = await createFlightKernel();
     k.fkInit();
     _kernel = k;
+    /* Best-effort: load the postal (post office) location blob so the kernel
+     * can resolve postal codes via fk_resolve_postal(). Non-fatal if missing. */
+    try {
+      const resp = await fetch(new URL('../wasm/postal_blob.bin', import.meta.url));
+      if (resp.ok && typeof k.cwrap === 'function') {
+        const bytes = new Uint8Array(await resp.arrayBuffer());
+        const loadPostal = k.cwrap('fk_load_postal_blob', 'number', ['array', 'number']);
+        const count = loadPostal(bytes, bytes.length);
+        if (count > 0) console.info(`[ParcelEstimator] postal data loaded: ${count} records`);
+      }
+    } catch {
+      /* Postal data is optional — distance calc falls back to IATA nodes */
+    }
     setStatus('비행 커널 준비 완료. 출발지와 도착지를 입력하거나 지도에서 선택하세요.');
   } catch (err) {
     setStatus('비행 커널 초기화 실패: ' + err.message, 'error');
