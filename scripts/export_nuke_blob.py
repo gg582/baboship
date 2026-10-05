@@ -21,8 +21,9 @@ def export_db(db_path, out_path):
         'land': 2 # Future use for land-based logistics if needed
     }
 
-    # Get nodes
-    cur.execute("SELECT id, code, latitude, longitude, COALESCE(country, ''), layer FROM nodes ORDER BY id ASC")
+    # Get nodes (postal office nodes in layer='post' are exported separately
+    # via export_postal_blob.py and must not leak into the route graph)
+    cur.execute("SELECT id, code, latitude, longitude, COALESCE(country, ''), layer FROM nodes WHERE layer != 'post' ORDER BY id ASC")
     nodes_data_db = cur.fetchall() # (id, code, lat, lon, country, layer_str)
     node_count = len(nodes_data_db)
     

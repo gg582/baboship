@@ -85,6 +85,14 @@ run_py scripts/ingest_cities.py \
   --source data/raw/cities500.zip \
   --output docs/cities.json
 
+log "Ingesting GeoNames postal code dumps (CC-BY 4.0) as layer='post' nodes"
+run_py scripts/ingest_postal.py \
+  --db data/nuke_routes.db \
+  --raw-dir data/raw/postal
+
+log "Exporting postal blob for the flight kernel WASM"
+run_py scripts/export_postal_blob.py data/nuke_routes.db docs/wasm/postal_blob.bin
+
 log "Exporting airports for static dashboard"
 run_py scripts/export_airports_json.py data/nuke_routes.db docs/airports.json
 

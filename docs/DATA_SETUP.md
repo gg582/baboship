@@ -61,3 +61,28 @@ python3 scripts/ingest_cities.py   # data/raw/cities500.zip 날려받기 + docs/
 - `generate_all.sh` 실행 시 위 수집 단계가 OpenFlights/해운 수집 이후에 자동으로 실행됩니다.
 - 귀속(Attribution): GeoNames, CC-BY 4.0 — UI의 "City data © GeoNames, CC-BY 4.0" 문구를 제거하지 마십시오.
 
+
+## 5. 우편번호(우체국) 위치 데이터 (GeoNames postal dumps)
+
+출발지/도착지를 공항 코드가 아닌 **실제 우편번호**로 지정할 때 정밀한 거리 계산을 위해 **GeoNames** 우편번호 덤프(CC-BY 4.0)를 사용합니다. 덤프는 `data/raw/postal/{국가}.zip`에 날려받고, `data/nuke_routes.db`의 `nodes` 테이블에 `layer='post'` 노드로 적재됩니다.
+
+```bash
+python3 scripts/ingest_postal.py   # data/raw/postal/*.zip 날려받기 + layer='post' 노드 적재
+python3 scripts/export_postal_blob.py data/nuke_routes.db docs/wasm/postal_blob.bin
+```
+
+- 소스: `https://download.geonames.org/export/zip/{국가}.zip` — 기본 국가: KR, CN, JP, SG, US, DE, NL, GB, HK, AE (GeoNames가 미커버 국가(HK 등)는 readme만 남고 건수 0으로 스킵됨)
+- 축약 정책: 고유 코드 수가 `--full-code-cap`(기본 6000) 이하인 국가는 **정확한 코드별 1점**, 초과 국가는 **3자리 코드 접두어별 중심점 1점**으로 축약하고, 전체는 `--max-rows`(기본 50000)로 상한을 둡니다.
+- 노드 코드 형식: `"{국가}:{코드}"` (예: `KR:031`, `NL:1011AB`).
+- `generate_all.sh` 실행 시 수집(날려받기+적재)과 `docs/wasm/postal_blob.bin` 납품이 자동으로 실행됩니다.
+
+### WASM 해소 경로
+
+우편번호 데이터는 누크 루트 그래프(`nuke_blob.bin`)에 포함하지 않고 **별도의 컴팩트 바이너리**(`POST` 매직, 35바이트 레코드: country[3] | code[16] | lat f64 | lon f64)로 납품합니다. `export_nuke_blob.py`는 `layer='post'` 노드를 루트 그래프에서 제외하므로 두 납품물은 완전히 분리됩니다.
+
+WASM 측 사용법 (`wasm/flight_kernel.c`):
+
+1. JS에서 `docs/wasm/postal_blob.bin`을 날려받아 `fkLoadPostalBlob(ptr, len)`으로 적재 (예: `docs/ui/parcel_estimator_tab.js`의 초기화 코드 참조)
+2. `fkResolvePostal("KR-03187" | "03187" | "DE 10115")` 호출 → `{"code","country","lat","lon","nearest_airport_code","distance_km"}` JSON 반환
+
+- 귀속(Attribution): GeoNames, CC-BY 4.0
