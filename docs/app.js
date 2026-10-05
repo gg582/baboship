@@ -2076,13 +2076,18 @@ document.addEventListener('DOMContentLoaded', () => {
           routeDistanceMaxKm = topCandidates[topCandidates.length - 1].totalDistanceKm;
           const etaTimestampsByCandidate = topCandidates.map((candidate) => {
             const remainingKm = Math.max(candidate.totalDistanceKm - observedDistance, 0);
-            const travelHrs = remainingKm > 5 ? (remainingKm / speed) : 0;
+            const travelHrs = remainingKm > 5
+              ? (futureMode === 'air' ? flightBlockHours(remainingKm) : remainingKm / speed)
+              : 0;
             const candidateTravelEndMs = lastEvent.timestampMs + (travelHrs + processingHours) * 3600000;
             const candidateCustomsEndMs = addBusinessHoursCalendar(candidateTravelEndMs, destinationCustomsHours, destIso, false);
             return addBusinessHoursCalendar(candidateCustomsEndMs, lastMileHours, destIso, true);
           });
           const minTimestamp = Math.min(...etaTimestampsByCandidate);
           const maxTimestamp = Math.max(...etaTimestampsByCandidate);
+          if (!Number.isFinite(minTimestamp) || !Number.isFinite(maxTimestamp)) {
+            throw new Error('candidate ETA timestamps not finite');
+          }
           etaTimestamp = minTimestamp;
           remainingRangeMinKm = Math.max(routeDistanceMinKm - observedDistance, 0);
           remainingRangeMaxKm = Math.max(routeDistanceMaxKm - observedDistance, 0);
@@ -2107,12 +2112,15 @@ document.addEventListener('DOMContentLoaded', () => {
         : etaTimestamp;
       etaRangeDisplay = await formatEtaDateRangeText(etaTimestamp, etaMax);
     }
+    if (!Number.isFinite(etaTimestamp)) return null;
+    const etaDisplay = formatTimelineTime(new Date(etaTimestamp));
+    const etaRangeDisplayFinal = etaRangeDisplay || (etaDisplay !== '--' ? etaDisplay : '');
     return {
       delivered: false,
       preDeparture,
       etaTimestamp,
-      etaDisplay: formatTimelineTime(new Date(etaTimestamp)),
-      etaRangeDisplay,
+      etaDisplay: etaDisplay !== '--' ? etaDisplay : '예측 불가',
+      etaRangeDisplay: etaRangeDisplayFinal,
       observedKm: observedDistanceBase,
       remainingKm: remainingDistance,
       transportMode: futureMode,
@@ -2260,7 +2268,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function formatTimelineTime(date) {
-    if (!(date instanceof Date)) return '--';
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '--';
     const pad = (val) => String(val).padStart(2, '0');
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }

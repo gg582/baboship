@@ -76,6 +76,7 @@ typedef struct {
     route_node_t nodes[MAX_ROUTE_NODES];
     size_t node_count;
     float dwell_penalty;
+    float merged_dwell_seconds;
     float route_penalty;
     float total_distance;
     float direct_distance;
@@ -112,32 +113,76 @@ static const impc_city_hint_t g_impc_city_hints[] = {
     {"LON", "LHR"},
     {"MOW", "SVO"},
     {"BER", "BER"},
-    {"AMS", "AMS"}
+    {"AMS", "AMS"},
+    {"SOF", "SOF"},
+    {"PRG", "PRG"},
+    {"WAW", "WAW"},
+    {"OTP", "OTP"},
+    {"ATH", "ATH"},
+    {"LIS", "LIS"},
+    {"ARN", "ARN"},
+    {"OSL", "OSL"},
+    {"CPH", "CPH"},
+    {"HEL", "HEL"},
+    {"BRU", "BRU"},
+    {"ZRH", "ZRH"},
+    {"VIE", "VIE"},
+    {"DUB", "DUB"},
+    {"TLV", "TLV"},
+    {"JED", "JED"},
+    {"KUL", "KUL"},
+    {"SGN", "SGN"},
+    {"MNL", "MNL"},
+    {"CGK", "CGK"},
+    {"AKL", "AKL"},
+    {"MEX", "MEX"}
 };
 static const size_t g_impc_city_hint_count = sizeof(g_impc_city_hints) / sizeof(g_impc_city_hints[0]);
 
 static const impc_country_hint_t g_impc_country_hints[] = {
     {"AE", "DXB"},
+    {"AT", "VIE"},
     {"AU", "SYD"},
+    {"BE", "BRU"},
+    {"BG", "SOF"},
     {"BR", "GRU"},
     {"CA", "YYZ"},
+    {"CH", "ZRH"},
     {"CN", "PVG"},
+    {"CZ", "PRG"},
     {"DE", "FRA"},
+    {"DK", "CPH"},
+    {"ES", "MAD"},
+    {"FI", "HEL"},
     {"FR", "CDG"},
     {"GB", "LHR"},
+    {"GR", "ATH"},
     {"HK", "HKG"},
     {"HU", "BUD"},
+    {"ID", "CGK"},
+    {"IE", "DUB"},
+    {"IL", "TLV"},
     {"IN", "DEL"},
     {"IT", "FCO"},
     {"JP", "NRT"},
     {"KR", "ICN"},
+    {"MX", "MEX"},
+    {"MY", "KUL"},
     {"NL", "AMS"},
+    {"NO", "OSL"},
+    {"PH", "MNL"},
+    {"PL", "WAW"},
+    {"PT", "LIS"},
     {"QA", "DOH"},
+    {"RO", "OTP"},
     {"RU", "SVO"},
+    {"SA", "JED"},
+    {"SE", "ARN"},
     {"SG", "SIN"},
     {"TH", "BKK"},
     {"TR", "IST"},
     {"US", "JFK"},
+    {"VN", "SGN"},
     {"ZA", "JNB"}
 };
 static const size_t g_impc_country_hint_count = sizeof(g_impc_country_hints) / sizeof(g_impc_country_hints[0]);
@@ -433,30 +478,52 @@ static float great_circle(float lat1, float lon1, float lat2, float lon2) {
 
 static void resolve_nodes(const log_parse_result_t *parsed) {
     g_state.node_count = 0;
+    g_state.merged_dwell_seconds = 0.0f;
     size_t ts_index = 0;
     uint64_t last_ts = 0;
     for (size_t i = 0; i < parsed->token_count && g_state.node_count < MAX_ROUTE_NODES; ++i) {
-        if (!resolve_token_to_node(parsed->tokens[i], &g_state.nodes[g_state.node_count])) {
+        route_node_t candidate;
+        if (!resolve_token_to_node(parsed->tokens[i], &candidate)) {
             continue;
         }
-        route_node_t *node = &g_state.nodes[g_state.node_count++];
         if (ts_index < parsed->time_count) {
-            node->timestamp = parsed->timestamps[ts_index++];
-            last_ts = node->timestamp;
+            candidate.timestamp = parsed->timestamps[ts_index++];
+            last_ts = candidate.timestamp;
         } else {
             last_ts += 3600;
-            node->timestamp = last_ts;
+            candidate.timestamp = last_ts;
         }
+        // Consecutive scans at the same office carry no distance; merge them and
+        // keep the latest timestamp while preserving the wait as dwell time.
+        if (g_state.node_count > 0 &&
+            strncmp(g_state.nodes[g_state.node_count - 1].iata, candidate.iata, 3) == 0) {
+            route_node_t *prev = &g_state.nodes[g_state.node_count - 1];
+            if (candidate.timestamp > prev->timestamp &&
+                candidate.timestamp - prev->timestamp > DWELL_THRESHOLD_SECONDS) {
+                g_state.merged_dwell_seconds += (float)(candidate.timestamp - prev->timestamp);
+            }
+            prev->timestamp = candidate.timestamp;
+            continue;
+        }
+        g_state.nodes[g_state.node_count++] = candidate;
     }
 }
 
 static void compute_edi(void) {
     g_state.total_distance = 0.0f;
     g_state.direct_distance = 0.0f;
-    g_state.dwell_penalty = 0.0f;
+    g_state.dwell_penalty = g_state.merged_dwell_seconds / (float)DWELL_THRESHOLD_SECONDS;
     g_state.route_penalty = 0.0f;
     g_state.edi_score = 0.0f;
-    if (g_state.node_count < 2) return;
+    if (g_state.node_count == 0) return;
+    if (g_state.node_count < 2) {
+        // A single observed office has no route to judge; only dwell wait applies.
+        float dwell_term = fminf(g_state.dwell_penalty, 1.0f);
+        float score = 100.0f * (1.0f - 0.35f * dwell_term);
+        if (score < 0.0f) score = 0.0f;
+        g_state.edi_score = score;
+        return;
+    }
 
     for (size_t i = 1; i < g_state.node_count; ++i) {
         const route_node_t *prev = &g_state.nodes[i - 1];
@@ -478,7 +545,15 @@ static void compute_edi(void) {
                                            g_state.nodes[0].lon,
                                            g_state.nodes[g_state.node_count - 1].lat,
                                            g_state.nodes[g_state.node_count - 1].lon);
-    if (g_state.direct_distance < 1e-3f) return;
+    if (g_state.direct_distance < 1e-3f) {
+        // All scans collapsed to a single office: no route deviation is possible,
+        // so only the dwell wait degrades the score.
+        float dwell_term = fminf(g_state.dwell_penalty, 1.0f);
+        float score = 100.0f * (1.0f - 0.35f * dwell_term);
+        if (score < 0.0f) score = 0.0f;
+        g_state.edi_score = score;
+        return;
+    }
 
     float excess = g_state.total_distance - g_state.direct_distance;
     if (excess > 0.0f) {
