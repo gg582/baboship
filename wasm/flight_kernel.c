@@ -10,7 +10,7 @@
  *        -s MODULARIZE=1 -s EXPORT_ES6=1 -s EXPORT_NAME=\"createFlightKernel\" \
  *        -s ENVIRONMENT=web,worker -s ALLOW_MEMORY_GROWTH=1 \
  *        -s NO_EXIT_RUNTIME=1 \
- *        -s EXPORTED_FUNCTIONS='["_fk_init","_fk_load_signal_data","_fk_generate_candidates","_fk_compute_eta_distribution","_malloc","_free"]' \
+ *        -s EXPORTED_FUNCTIONS='["_fk_init","_fk_load_signal_data","_fk_generate_candidates","_fk_compute_eta_distribution","_fk_load_postal_blob","_fk_resolve_postal","_malloc","_free"]' \
  *        -s EXPORTED_RUNTIME_METHODS='["cwrap","UTF8ToString","stringToUTF8","lengthBytesUTF8","allocate","intArrayFromString","ALLOC_NORMAL"]' \
  *        -o ../docs/wasm/flight_kernel.js
  */
@@ -36,9 +36,28 @@
 #endif
 
 /* ---- constants ---- */
-#define FK_MAX_AIRPORTS   32
+#define FK_MAX_AIRPORTS   40
 #define FK_MAX_CANDIDATES 10
+#define FK_MAX_POSTAL     60000
 #define FK_JSON_BUF       8192
+
+/*
+ * Flight speed profile (keep in sync with FLIGHT_PROFILE in docs/app.js).
+ * Block time = fixed ground overhead + cruise at a distance-dependent speed:
+ * short haul (< ~1500 km) flies slower on an effective block-speed basis
+ * (climb fraction dominates), long haul converges to wide-body cruise speed.
+ */
+#define FK_FLIGHT_OVERHEAD_H  0.5    /* taxi + takeoff + approach/landing */
+#define FK_CRUISE_SHORT_KMH   650.0  /* effective block speed, short haul  */
+#define FK_CRUISE_LONG_KMH    880.0  /* long-haul wide-body cruise         */
+#define FK_PROFILE_SHORT_KM   500.0  /* below: constant short-haul speed   */
+#define FK_PROFILE_LONG_KM   2500.0  /* above: constant long-haul speed    */
+
+/* Transfer windows (hours): well-connected cargo hubs turn freight faster */
+#define FK_TRANSFER_PREFERRED_H 1.5
+#define FK_TRANSFER_DEFAULT_H   2.5
+/* One-hub detour cap for non-preferred hubs (preferred hubs are exempt) */
+#define FK_DETOUR_CAP          1.35
 
 /* ---- internal types ---- */
 typedef struct {
@@ -87,13 +106,25 @@ static double fk_gc_distance_km(double lat1, double lon1,
     return r * c;
 }
 
-/* Rough flight-speed estimate in km/h (cargo wide-body cruises ~850 km/h) */
+/*
+ * Distance-based flight block-time estimate.
+ * Cruises at FK_CRUISE_LONG_KMH for long haul, FK_CRUISE_SHORT_KMH for short
+ * haul, linearly blended in between, plus a fixed ground overhead.
+ */
 static double fk_flight_hours(double dist_km) {
-    if (dist_km <= 0.0) return 0.5;
-    /* add taxi/climb/descent time proportional to distance */
-    double cruise = dist_km / 850.0;
-    double fixed_overhead = 0.75; /* taxi + takeoff + approach/landing */
-    return cruise + fixed_overhead;
+    if (dist_km <= 0.0) return FK_FLIGHT_OVERHEAD_H;
+    double cruise_kmh;
+    if (dist_km <= FK_PROFILE_SHORT_KM) {
+        cruise_kmh = FK_CRUISE_SHORT_KMH;
+    } else if (dist_km >= FK_PROFILE_LONG_KM) {
+        cruise_kmh = FK_CRUISE_LONG_KMH;
+    } else {
+        double t = (dist_km - FK_PROFILE_SHORT_KM) /
+                   (FK_PROFILE_LONG_KM - FK_PROFILE_SHORT_KM);
+        cruise_kmh = FK_CRUISE_SHORT_KMH +
+                     t * (FK_CRUISE_LONG_KMH - FK_CRUISE_SHORT_KMH);
+    }
+    return dist_km / cruise_kmh + FK_FLIGHT_OVERHEAD_H;
 }
 
 /*
@@ -129,9 +160,55 @@ static const fk_airport_t FK_SEED_AIRPORTS[] = {
     {"YYZ",  43.6772,  -79.631, "Canada"},
     {"SYD", -33.9461,  151.177, "Australia"},
     {"MEL", -37.6733,  144.843, "Australia"},
+    /* Additional global cargo transshipment hubs (see FK_PREFERRED_HUBS) */
+    {"ANC",  61.1743, -149.996, "USA"},
+    {"MEM",  35.0424, -89.9767, "USA"},
+    {"LGG",  50.6374,   5.4433, "Belgium"},
+    {"BOM",  19.0896,  72.8656, "India"},
+    {"SGN",  10.8188, 106.652,  "Vietnam"},
+    {"CAN",  23.3924,  113.299, "China"},
 };
 static const int FK_SEED_COUNT =
     (int)(sizeof(FK_SEED_AIRPORTS) / sizeof(FK_SEED_AIRPORTS[0]));
+
+/*
+ * Curated list of major logistics transshipment hubs. Routes via these hubs
+ * are always considered (the detour cap does not apply) and they receive the
+ * shorter preferred-hub transfer window.
+ */
+static const char *const FK_PREFERRED_HUBS[] = {
+    "ICN", "HKG", "SIN", "DXB", "FRA", "MEM", "CDG", "NRT", "ANC",
+    "PVG", "CAN", "AMS", "LGG", "ORD", "LAX", "DOH", "SGN", "BOM",
+};
+static const int FK_PREFERRED_COUNT =
+    (int)(sizeof(FK_PREFERRED_HUBS) / sizeof(FK_PREFERRED_HUBS[0]));
+
+static bool fk_is_preferred_hub(const char *iata) {
+    if (!iata) return false;
+    for (int i = 0; i < FK_PREFERRED_COUNT; i++) {
+        if (strncmp(FK_PREFERRED_HUBS[i], iata, 3) == 0) return true;
+    }
+    return false;
+}
+
+/* ---- postal (post office) node data ----
+ * Compact binary 'POST' blob, exported separately from the Nuke blob by
+ * scripts/export_postal_blob.py. Each 32-byte record:
+ *   country char[3] | code char[16] | lat double | lon double
+ * Codes are either full postal codes (small countries) or 3-digit prefix
+ * centroids (large countries); see scripts/ingest_postal.py.
+ */
+#define FK_POSTAL_REC_SIZE 35
+
+typedef struct {
+    char code[16];    /* postal code or 3-digit prefix */
+    char country[3];  /* ISO-3166 alpha-2 */
+    double lat;
+    double lon;
+} fk_postal_t;
+
+static fk_postal_t g_postal[FK_MAX_POSTAL];
+static int g_postal_count = 0;
 
 /* ---- exported API ---- */
 
@@ -341,12 +418,13 @@ FK_EXPORT const char *fk_generate_candidates(const char *origin_iata,
         if (strncmp(hub->iata, orig->iata, 3) == 0) continue;
         if (strncmp(hub->iata, dest->iata, 3) == 0) continue;
 
-        /* Only use hubs that lie geographically between origin and dest */
+        /* Only use hubs that lie geographically between origin and dest.
+         * Preferred transshipment hubs are exempt from the detour cap. */
         double orig_hub = fk_gc_distance_km(orig->lat, orig->lon, hub->lat, hub->lon);
         double hub_dest = fk_gc_distance_km(hub->lat, hub->lon, dest->lat, dest->lon);
         double orig_dest = fk_gc_distance_km(orig->lat, orig->lon, dest->lat, dest->lon);
-        /* prune hubs that add more than 35 % detour */
-        if (orig_hub + hub_dest > orig_dest * 1.35) continue;
+        bool preferred = fk_is_preferred_hub(hub->iata);
+        if (!preferred && orig_hub + hub_dest > orig_dest * FK_DETOUR_CAP) continue;
 
         fk_candidate_t c;
         memset(&c, 0, sizeof(c));
@@ -355,7 +433,8 @@ FK_EXPORT const char *fk_generate_candidates(const char *origin_iata,
         c.hub_count = 1;
         strncpy(c.destination, dest->iata, 3);
         c.segment_hours[0] = fk_flight_hours(orig_hub);
-        c.transfer_hours[0] = 2.5; /* typical cargo transfer window */
+        c.transfer_hours[0] = preferred ? FK_TRANSFER_PREFERRED_H
+                                        : FK_TRANSFER_DEFAULT_H;
         c.segment_hours[1] = fk_flight_hours(hub_dest);
         c.plausibility_score = fk_score_candidate(&c, orig->lat, orig->lon,
                                                     dest->lat, dest->lon);
@@ -544,5 +623,231 @@ FK_EXPORT const char *fk_compute_eta_distribution(const char *candidates_json) {
     }
     FK_ETA_APPEND("]}");
 #undef FK_ETA_APPEND
+    return buf;
+}
+
+/* ---- postal data exports ---- */
+
+/**
+ * fk_load_postal_blob — load a compact 'POST' binary blob of postal
+ * (post office) locations, as exported by scripts/export_postal_blob.py.
+ *
+ * Layout: magic "POST" (4 bytes), version u32 LE, record count u32 LE,
+ * followed by `count` fixed-size 35-byte records:
+ *   country char[3] | code char[16] | lat double LE | lon double LE
+ *
+ * Returns the number of records loaded, or -1 on a malformed blob.
+ */
+FK_EXPORT int fk_load_postal_blob(const unsigned char *data, int len) {
+    if (!data || len < 12) return -1;
+    if (memcmp(data, "POST", 4) != 0) return -1;
+    uint32_t version, count;
+    memcpy(&version, data + 4, 4);
+    memcpy(&count, data + 8, 4);
+    if (version != 1) return -1;
+    if ((uint64_t)12 + (uint64_t)count * FK_POSTAL_REC_SIZE > (uint64_t)len) {
+        return -1;
+    }
+    if ((int)count > FK_MAX_POSTAL) count = FK_MAX_POSTAL;
+
+    const unsigned char *rec = data + 12;
+    for (uint32_t i = 0; i < count; i++) {
+        fk_postal_t *p = &g_postal[i];
+        memset(p, 0, sizeof(*p));
+        memcpy(p->country, rec, 2);
+        p->country[2] = '\0';
+        memcpy(p->code, rec + 3, 15); /* room for NUL within char[16] */
+        p->code[15] = '\0';
+        memcpy(&p->lat, rec + 19, 8);
+        memcpy(&p->lon, rec + 27, 8);
+        rec += FK_POSTAL_REC_SIZE;
+    }
+    g_postal_count = (int)count;
+    return g_postal_count;
+}
+
+/* Find the nearest known airport to a coordinate.
+ * Returns NULL when no airports are loaded; *out_dist_km (if given) receives
+ * the great-circle distance to the nearest airport. */
+static const fk_airport_t *fk_nearest_airport(double lat, double lon,
+                                               double *out_dist_km) {
+    const fk_airport_t *best = NULL;
+    double best_dist = 1e12;
+    for (int i = 0; i < g_airport_count; i++) {
+        double d = fk_gc_distance_km(lat, lon,
+                                      g_airports[i].lat, g_airports[i].lon);
+        if (d < best_dist) {
+            best_dist = d;
+            best = &g_airports[i];
+        }
+    }
+    if (out_dist_km) *out_dist_km = best_dist;
+    return best;
+}
+
+/* Case-insensitive postal record match on code (and country if given).
+ * A record matches when its code and the query share a common prefix of at
+ * least 3 characters in either direction — so both 3-digit-prefix centroids
+ * ("query is longer") and full-code records ("record is longer", e.g. Dutch
+ * 4-digit codes vs a typed 6-character code) resolve. */
+static const fk_postal_t *fk_match_postal(const char *country,
+                                           const char *code) {
+    size_t code_len = strlen(code);
+    for (int i = 0; i < g_postal_count; i++) {
+        const fk_postal_t *p = &g_postal[i];
+        if (country && country[0] &&
+            strncmp(p->country, country, 2) != 0) continue;
+        size_t plen = strlen(p->code);
+        size_t n = plen < code_len ? plen : code_len;
+        if (n >= 3 && strncmp(p->code, code, n) == 0) return p;
+    }
+    return NULL;
+}
+
+/* True when the 2-letter country appears in the loaded postal data. */
+static bool fk_country_known(const char *country) {
+    if (!country || !country[0]) return false;
+    for (int i = 0; i < g_postal_count; i++) {
+        if (strncmp(g_postal[i].country, country, 2) == 0) return true;
+    }
+    return false;
+}
+
+/* Exact-length code match (optionally country-scoped). */
+static const fk_postal_t *fk_match_postal_exact(const char *country,
+                                                 const char *code) {
+    size_t code_len = strlen(code);
+    for (int i = 0; i < g_postal_count; i++) {
+        const fk_postal_t *p = &g_postal[i];
+        if (country && country[0] &&
+            strncmp(p->country, country, 2) != 0) continue;
+        if (strlen(p->code) == code_len && strncmp(p->code, code, code_len) == 0) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * Global prefix search that only succeeds when the match is unambiguous,
+ * i.e. all matching records belong to a single country. Guards against
+ * matching e.g. "031" in the UAE when the user meant Korea.
+ * Returns NULL when there are no matches or the match is ambiguous.
+ */
+static const fk_postal_t *fk_match_unique(const char *code,
+                                           char *out_country) {
+    const fk_postal_t *first = NULL;
+    char country[3] = "";
+    size_t code_len = strlen(code);
+    for (int i = 0; i < g_postal_count; i++) {
+        const fk_postal_t *p = &g_postal[i];
+        size_t plen = strlen(p->code);
+        size_t n = plen < code_len ? plen : code_len;
+        if (n >= 3 && strncmp(p->code, code, n) == 0) {
+            if (!first) {
+                first = p;
+                country[0] = p->country[0];
+                country[1] = p->country[1];
+            } else if (strncmp(p->country, country, 2) != 0) {
+                return NULL; /* ambiguous across countries */
+            }
+        }
+    }
+    if (first && out_country) {
+        out_country[0] = country[0];
+        out_country[1] = country[1];
+        out_country[2] = '\0';
+    }
+    return first;
+}
+
+/**
+ * fk_resolve_postal — resolve a postal code to a location plus the nearest
+ * known airport, for precise origin/destination distance calculation.
+ *
+ * Accepts "12345", "DE-10115", "DE 10115" or "10115 DE" forms. A 2-letter
+ * country token is only stripped when it is a known dataset country and the
+ * remaining code starts with a digit (so alphanumeric codes such as Dutch
+ * "1011AB" are not mis-parsed).
+ *
+ * Returns a JSON object:
+ *   {"code","country","lat","lon","nearest_airport_code","distance_km"}
+ * or {"error":"not_found"} when the code is unknown or data is not loaded.
+ */
+FK_EXPORT const char *fk_resolve_postal(const char *query) {
+    static char buf[FK_JSON_BUF];
+    snprintf(buf, sizeof(buf), "{\"error\":\"not_loaded\"}");
+    if (!query) return buf;
+    if (g_postal_count == 0) {
+        snprintf(buf, sizeof(buf), "{\"error\":\"not_loaded\"}");
+        return buf;
+    }
+
+    /* Normalise: uppercase, keep only alphanumerics. */
+    char code[32] = "";
+    char country[3] = "";
+    size_t ci = 0;
+    for (const char *q = query; *q && ci < sizeof(code) - 1; q++) {
+        unsigned char ch = (unsigned char)*q;
+        if (!isalnum(ch)) continue;
+        code[ci++] = (char)toupper(ch);
+    }
+    code[ci] = '\0';
+    if (ci == 0) {
+        snprintf(buf, sizeof(buf), "{\"error\":\"not_found\"}");
+        return buf;
+    }
+    /* A 2-letter alphabetic country prefix ("DE10115") or suffix ("10115DE")
+     * is stripped only when it is a known country and the code part starts
+     * with a digit. Prefix form takes precedence. */
+    if (ci >= 3 && isalpha((unsigned char)code[0]) &&
+        isalpha((unsigned char)code[1]) &&
+        isdigit((unsigned char)code[2])) {
+        char cand[3] = { code[0], code[1], '\0' };
+        if (fk_country_known(cand)) {
+            country[0] = code[0];
+            country[1] = code[1];
+            country[2] = '\0';
+            memmove(code, code + 2, ci - 1); /* drop 2 chars + re-NUL */
+        }
+    } else if (ci >= 3 && isalpha((unsigned char)code[ci - 1]) &&
+               isalpha((unsigned char)code[ci - 2]) &&
+               isdigit((unsigned char)code[0])) {
+        char cand[3] = { code[ci - 2], code[ci - 1], '\0' };
+        if (fk_country_known(cand)) {
+            country[0] = code[ci - 2];
+            country[1] = code[ci - 1];
+            country[2] = '\0';
+            code[ci - 2] = '\0';
+        }
+    }
+
+    /* Exact-length match first (country-scoped, then global), then a
+     * prefix-compatible match (country-scoped, then global only when the
+     * match is unambiguous across countries). */
+    const fk_postal_t *hit = NULL;
+    if (country[0]) hit = fk_match_postal_exact(country, code);
+    if (!hit) hit = fk_match_postal_exact(NULL, code);
+    if (!hit && country[0]) hit = fk_match_postal(country, code);
+    if (!hit) hit = fk_match_unique(code, country);
+    if (!hit) {
+        snprintf(buf, sizeof(buf), "{\"error\":\"not_found\"}");
+        return buf;
+    }
+
+    double dist_km = 0.0;
+    const fk_airport_t *ap = fk_nearest_airport(hit->lat, hit->lon, &dist_km);
+    if (!ap) {
+        snprintf(buf, sizeof(buf),
+            "{\"code\":\"%s\",\"country\":\"%s\",\"lat\":%.5f,\"lon\":%.5f,"
+            "\"nearest_airport_code\":\"\",\"distance_km\":-1}",
+            hit->code, hit->country, hit->lat, hit->lon);
+        return buf;
+    }
+    snprintf(buf, sizeof(buf),
+        "{\"code\":\"%s\",\"country\":\"%s\",\"lat\":%.5f,\"lon\":%.5f,"
+        "\"nearest_airport_code\":\"%s\",\"distance_km\":%.1f}",
+        hit->code, hit->country, hit->lat, hit->lon,
+        ap->iata, dist_km);
     return buf;
 }

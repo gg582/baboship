@@ -28,7 +28,7 @@ WASM_EMFLAGS := -s MODULARIZE=1 -s EXPORT_ES6=1 -s EXPORT_NAME=\"createNukeKerne
 FK_MODULE := flight_kernel
 FK_TARGET := $(WASM_DIST_DIR)/$(FK_MODULE).js
 FK_SRC    := wasm/$(FK_MODULE).c
-FK_EXPORTS := '["_fk_init","_fk_load_signal_data","_fk_generate_candidates","_fk_compute_eta_distribution","_malloc","_free"]'
+FK_EXPORTS := '["_fk_init","_fk_load_signal_data","_fk_generate_candidates","_fk_compute_eta_distribution","_fk_load_postal_blob","_fk_resolve_postal","_malloc","_free"]'
 FK_RUNTIME_METHODS := '["cwrap","UTF8ToString","stringToUTF8","lengthBytesUTF8","allocate","intArrayFromString","ALLOC_NORMAL"]'
 FK_EMFLAGS := -s MODULARIZE=1 -s EXPORT_ES6=1 -s EXPORT_NAME=\"createFlightKernel\" -s ENVIRONMENT=web,worker -s ALLOW_MEMORY_GROWTH=1 -s NO_EXIT_RUNTIME=1
 
@@ -58,7 +58,7 @@ clean:
 	$(MAKE) -C $(CWIST_DIR) clean || true
 	$(MAKE) -C $(TTAK_DIR) clean || true
 
-wasm: $(WASM_TARGET) $(FK_TARGET) docs/wasm/nuke_blob.bin docs/airports.json
+wasm: $(WASM_TARGET) $(FK_TARGET) docs/wasm/nuke_blob.bin docs/wasm/postal_blob.bin docs/airports.json
 
 docs/airports.json: db-setup scripts/export_airports_json.py # Changed dependency from data/nuke_routes.db to db-setup
 	python3 scripts/export_airports_json.py data/nuke_routes.db docs/airports.json
@@ -69,6 +69,10 @@ docs/index.html: templates/index.html.tmpl scripts/generate_static_index.py
 docs/wasm/nuke_blob.bin: db-setup scripts/export_nuke_blob.py # Changed dependency from data/nuke_routes.db to db-setup
 	@mkdir -p docs/wasm
 	python3 scripts/export_nuke_blob.py data/nuke_routes.db docs/wasm/nuke_blob.bin
+
+docs/wasm/postal_blob.bin: db-setup scripts/export_postal_blob.py
+	@mkdir -p docs/wasm
+	python3 scripts/export_postal_blob.py data/nuke_routes.db docs/wasm/postal_blob.bin
 
 # Removed the old data/nuke_routes.db target, now handled by db-setup
 # data/nuke_routes.db:
