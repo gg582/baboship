@@ -245,6 +245,46 @@ const HARD_CODED_NODE_FALLBACKS = {
   LHR: { code: 'LHR', lat: 51.4700, lon: -0.4543, layer: 'air' }
 };
 
+// City/facility aliases produced by normalizeTrackingLocation() (e.g. "INCHEON",
+// "SOFIA") are not IATA node codes, so they never match state.nodeMap directly.
+// Map each alias to a real hub node plus its ISO country code so enriched events
+// always carry coordinates and a country.
+const CITY_ALIAS_NODES = {
+  INCHEON: { code: 'ICN', iso: 'KR' },
+  SEOUL: { code: 'GMP', iso: 'KR' },
+  DAEGU: { code: 'TAE', iso: 'KR' },
+  SOFIA: { code: 'SOF', iso: 'BG' },
+  LOSANGELES: { code: 'LAX', iso: 'US' },
+  FRANKFURT: { code: 'FRA', iso: 'DE' },
+  HONGKONG: { code: 'HKG', iso: 'HK' },
+  SINGAPORE: { code: 'SIN', iso: 'SG' },
+  PUDONG: { code: 'PVG', iso: 'CN' }
+};
+
+// Resolve a tracking alias to { lat, lon, layer, iso } using the node map,
+// city-alias mapping, major logistics centers, and hard-coded fallbacks.
+function resolveAliasNode(alias) {
+  const normalized = (alias || '').toString().trim().toUpperCase();
+  if (!normalized) return null;
+  const node = state.nodeMap.get(normalized);
+  if (node) {
+    return { lat: node.lat, lon: node.lon, layer: node.layer || 'air', iso: '' };
+  }
+  const cityAlias = CITY_ALIAS_NODES[normalized];
+  if (cityAlias) {
+    const hub = state.nodeMap.get(cityAlias.code) || HARD_CODED_NODE_FALLBACKS[cityAlias.code];
+    if (hub) {
+      return { lat: hub.lat, lon: hub.lon, layer: hub.layer || 'air', iso: cityAlias.iso };
+    }
+    return { lat: null, lon: null, layer: null, iso: cityAlias.iso };
+  }
+  const center = MAJOR_LOGISTICS_CENTERS.find((c) => c.alias === normalized);
+  if (center) {
+    return { lat: center.lat, lon: center.lon, layer: 'land', iso: center.countryCode || '' };
+  }
+  return null;
+}
+
 // ─── Postal EDI Routing Code Detection ───────────────────────────────────
 // Strings such as "UAIEVCKRSELBAUX60062" are postal dispatch routing identifiers
 // (likely UPU CARDIT/RESDIT format), NOT SITA/ARINC Type-B addresses.
@@ -2284,7 +2324,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return rawEvents.map(progress => {
       const location = progress?.location?.name || progress?.location?.display || progress?.location || progress?.officeName || '';
       const code = progress?.location?.code || progress?.code || '';
-      const countryCode = (progress?.location?.countryCode || progress?.countryCode || progress?.country || '').toString().trim().toUpperCase();
+      let countryCode = (progress?.location?.countryCode || progress?.countryCode || progress?.country || '').toString().trim().toUpperCase();
       const alias = normalizeTrackingLocation(location, code, countryCode);
       const date = getEventDate(progress);
       const token = formatTimestampToken(date);
@@ -2293,12 +2333,15 @@ document.addEventListener('DOMContentLoaded', () => {
       let lat = null;
       let lon = null;
       let layer = null;
-      // Attempt to resolve lat/lon from state.nodeMap using the alias
-      const resolvedNode = state.nodeMap.get(alias);
-      if (resolvedNode) {
-        lat = resolvedNode.lat;
-        lon = resolvedNode.lon;
-        layer = resolvedNode.layer || layer;
+      // Resolve coordinates/country from the node map or alias mappings
+      const resolvedAlias = resolveAliasNode(alias);
+      if (resolvedAlias) {
+        lat = resolvedAlias.lat;
+        lon = resolvedAlias.lon;
+        layer = resolvedAlias.layer || null;
+        if (!countryCode && resolvedAlias.iso) {
+          countryCode = resolvedAlias.iso;
+        }
       }
       if ((lat === null || lon === null) && progress?.location?.lat && progress?.location?.lon) {
         lat = Number(progress.location.lat);
