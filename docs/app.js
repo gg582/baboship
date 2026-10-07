@@ -1424,6 +1424,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let estimatorTab = null; // API returned by initEstimatorTab
 
+  // --- Dark mode toggle ---
+  const themeToggleBtn = document.getElementById('theme-toggle');
+  if (themeToggleBtn) {
+    const syncThemeToggle = () => {
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      themeToggleBtn.textContent = isDark ? '☀️ 라이트 모드' : '🌙 다크 모드';
+      themeToggleBtn.setAttribute('aria-pressed', isDark ? 'true' : 'false');
+    };
+    syncThemeToggle();
+    themeToggleBtn.addEventListener('click', () => {
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      if (isDark) {
+        document.documentElement.removeAttribute('data-theme');
+      } else {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      }
+      try { localStorage.setItem('baboship-theme', isDark ? 'light' : 'dark'); } catch (_) { /* 저장 불가 환경 무시 */ }
+      syncThemeToggle();
+    });
+  }
+
   // --- MapLibre GL JS Integration ---
   function initMap(containerId, isModal = false) {
     let currentTileEndpointIndex = 0;

@@ -11,6 +11,37 @@
     --outline: #c0c7d6;
 }
 
+[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0f1117;
+    --card: #171a23;
+    --card-border: #2a2f3d;
+    --accent: #f97316;
+    --accent-soft: #fb923c;
+    --muted: #9aa3b5;
+    --text: #e8ebf2;
+    --outline: #3d4454;
+}
+
+.theme-toggle {
+    align-self: flex-end;
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    background: var(--card);
+    color: var(--muted);
+    padding: 0.4rem 0.9rem;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+    width: auto;
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.theme-toggle:hover {
+    color: var(--text);
+    border-color: var(--outline);
+}
+
 * {
     box-sizing: border-box;
 }
@@ -748,6 +779,19 @@ button.ghost:hover {
         padding: 1.5rem 1rem 2rem;
     }
 
+    .mode-tabs {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.5rem;
+    }
+
+    .mode-tab {
+        padding: 0.65rem 0.5rem;
+        font-size: 0.9rem;
+        text-align: center;
+        width: 100%;
+    }
+
     .tracking-header {
         flex-direction: column;
         align-items: flex-start;
@@ -760,6 +804,11 @@ button.ghost:hover {
 
     button {
         width: 100%;
+    }
+
+    .theme-toggle {
+        width: auto;
+        align-self: flex-end;
     }
 
     #map-wrapper {
@@ -1137,3 +1186,63 @@ button.ghost:hover {
 
 .badge-ok { background: #dcfce7; color: #166534; }
 .badge-na { background: #f1f5f9; color: #64748b; }
+
+/* ─── Dark theme overrides for hard-coded light colors ─────────────── */
+[data-theme="dark"] input,
+[data-theme="dark"] .log-input textarea,
+[data-theme="dark"] .tracking-actions label select,
+[data-theme="dark"] .best-controls select {
+    background: #12151d;
+    color: var(--text);
+    border-color: var(--card-border);
+}
+
+[data-theme="dark"] input::placeholder,
+[data-theme="dark"] .log-input textarea::placeholder {
+    color: #6b7385;
+}
+
+[data-theme="dark"] .tracking-metrics .metric,
+[data-theme="dark"] .stat,
+[data-theme="dark"] .selection-pill,
+[data-theme="dark"] .best-card-item,
+[data-theme="dark"] .badge-na {
+    background: #1c202b;
+}
+
+[data-theme="dark"] .tracking-status.error,
+[data-theme="dark"] #map-loader.error {
+    color: #f87171;
+}
+
+[data-theme="dark"] .map-mode button {
+    background: #1c202b;
+    color: var(--muted);
+}
+
+[data-theme="dark"] .map-mode button.active {
+    background: var(--accent);
+    color: #fff;
+}
+
+[data-theme="dark"] .tag {
+    background: #262c3a;
+}
+
+[data-theme="dark"] .adv-note {
+    background: #241a12;
+    color: #fbbf24 !important;
+}
+
+[data-theme="dark"] .opensky-badge.anonymous {
+    background: #262c3a;
+    color: #9aa3b5;
+}
+
+[data-theme="dark"] #map-wrapper {
+    background: #12151d;
+}
+
+[data-theme="dark"] .maritime-invoice-guide {
+    background: #12151d !important;
+}

@@ -9,6 +9,17 @@
     <meta property="og:description" content="송장 번호를 넣으면 배송 경로와 도착 예정일을 계산해 드립니다.">
     <meta property="og:type" content="website">
     <meta name="theme-color" content="#1d4ed8">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📦</text></svg>">
+    <script>
+        // Restore theme before first paint to avoid a light/dark flash.
+        (function () {
+            var saved = null;
+            try { saved = localStorage.getItem('baboship-theme'); } catch (e) {}
+            if (saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -27,6 +38,7 @@
                 <strong>바보쉽</strong>
                 <p>국제 배송, 지금 어디쯤 왔는지 궁금할 때. 송장 번호 하나면 됩니다.</p>
             </div>
+            <button type="button" id="theme-toggle" class="theme-toggle" aria-label="다크 모드 전환" aria-pressed="false">🌙 다크 모드</button>
             <div class="mode-tabs" role="tablist" aria-label="화물 분석 모드">
                 <button type="button" class="mode-tab active" data-mode-tab="tracking" role="tab" aria-controls="tracking-panel" aria-selected="true">내 소포 어디까지 왔나</button>
                 <button type="button" class="mode-tab" data-mode-tab="manual" role="tab" aria-controls="manual-panel" aria-selected="false">공항끼리 경로 찾기</button>
