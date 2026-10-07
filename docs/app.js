@@ -1586,20 +1586,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function updateMapRoutes(mapInstance, paths) { // Renamed routesToDisplay to paths
     if (!mapInstance || !mapInstance.getSource('routes')) return;
-    const features = paths.map((path, idx) => ({ // Changed route to path
-      type: 'Feature',
-      geometry: {
-        type: 'LineString',
-        coordinates: path.nodes.map(nodeCode => { // Assuming path.nodes is array of nodeCodes
-          const node = state.nodeMap.get(nodeCode); 
-          return [node.lon, node.lat];
-        })
-      },
-      properties: {
-        id: `route-${idx}`, // Unique ID for filtering
-        layer: path.layer // Assuming layer is available in path object from WASM
-      }
-    }));
+    const features = (paths || [])
+      .map((path, idx) => {
+        const coordinates = (Array.isArray(path.nodes) ? path.nodes : [])
+          .map((n) => state.nodeMap.get(typeof n === 'string' ? n : n?.code))
+          .filter((node) => node && Number.isFinite(node.lon) && Number.isFinite(node.lat))
+          .map((node) => [node.lon, node.lat]);
+        if (coordinates.length < 2) return null;
+        return {
+          type: 'Feature',
+          geometry: {
+            type: 'LineString',
+            coordinates
+          },
+          properties: {
+            id: `route-${idx}`, // Unique ID for filtering
+            layer: path.layer // Assuming layer is available in path object from WASM
+          }
+        };
+      })
+      .filter(Boolean);
     mapInstance.getSource('routes').setData({
       type: 'FeatureCollection',
       features: features
