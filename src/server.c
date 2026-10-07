@@ -10,6 +10,9 @@
 #include <stdint.h>
 
 #include <cwist/sys/app/app.h>
+#include <cwist/sys/app/compress.h>
+#include <cwist/net/http/http.h>
+#include <cwist/middleware.h>
 #include <cwist/core/sstring/sstring.h>
 #include <cwist/core/db/nuke_db.h>
 #include <cwist/core/db/sql.h>
@@ -103,6 +106,7 @@ static void write_json_response(cwist_http_response *res, cJSON *json, cwist_htt
     cwist_http_header_add(&res->headers, "Content-Type", "application/json");
     cwist_sstring_assign(res->body, payload);
     res->status_code = status;
+    cwist_http_response_add_security_headers(res);
     cJSON_free(payload);
 }
 
@@ -514,12 +518,12 @@ static bool is_route_restricted(const char *from, const char *to, const char **r
 static void root_handler(cwist_http_request *req, cwist_http_response *res) {
     (void)req;
     cJSON *context = cJSON_CreateObject();
-    cJSON_AddStringToObject(context, "app_name", "바보쉽 라우트 콘솔");
-    cJSON_AddStringToObject(context, "hero_pill", "Global Freight Control");
+    cJSON_AddStringToObject(context, "app_name", "바보쉽 - 누구나 알 수 있는 직구 택배 위치");
+    cJSON_AddStringToObject(context, "hero_pill", "세계 공항·항구 노선 지도");
     cJSON_AddStringToObject(
         context,
         "hero_body",
-        "실시간 항로 지표와 통제된 규제를 결합해, 배송 최단 시간 경로를 한 화면에서 설계하세요.");
+        "공항끼리 직접 경로를 짜거나, 배로 본 물건이 지나갈 항로도 찾아볼 수 있습니다. 규제로 막힌 노선은 빼고 계산합니다.");
     const char *tracker_api_base = getenv("TRACKER_API_BASE");
     if (!tracker_api_base || tracker_api_base[0] == '\0') {
         tracker_api_base = "https://apis.tracker.delivery";
@@ -961,7 +965,17 @@ int main(void) {
     cwist_app_get(g_app, "/best", best_handler);
     cwist_app_get(g_app, "/direct", direct_handler);
     cwist_app_post(g_app, "/tracking/analyze", tracking_analyze_handler);
-    cwist_app_static(g_app, "/docs", "docs");
+
+    // Production middleware: compress large JSON/HTML bodies (the nodes
+    // payload is several hundred KB), log requests, and add security headers
+    // via the default error/success response path.
+    cwist_compress_register_backend(cwist_compress_backend_brotli());
+    cwist_compress_register_backend(cwist_compress_backend_zstd());
+    cwist_compress_register_backend(cwist_compress_backend_gzip());
+    cwist_app_use(g_app, cwist_mw_compress(1024));
+    cwist_app_use(g_app, cwist_mw_access_log(CWIST_LOG_COMBINED));
+    cwist_app_static_with_cache(g_app, "/docs", "docs",
+                                "public, max-age=3600, stale-while-revalidate=86400");
 
     const char *port_env = getenv("PORT");
     int port = port_env ? atoi(port_env) : 8080;

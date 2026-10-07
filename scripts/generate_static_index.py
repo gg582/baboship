@@ -13,9 +13,9 @@ def render_template():
 
     # Define template variables
     variables = {
-        'app_name': '바보쉽 라우트 콘솔',
-        'hero_pill': 'Global Freight Control',
-        'hero_body': '실시간 항로 지표와 통제된 규제를 결합해, 배송 최단 시간 경로를 한 화면에서 설계하세요.',
+        'app_name': '바보쉽 - 누구나 알 수 있는 직구 택배 위치',
+        'hero_pill': '세계 공항·항구 노선 지도',
+        'hero_body': '공항끼리 직접 경로를 짜거나, 배로 본 물건이 지나갈 항로도 찾아볼 수 있습니다. 규제로 막힌 노선은 빼고 계산합니다.',
         'tracker_api_base': os.environ.get('TRACKER_API_BASE', 'https://apis.tracker.delivery'),
         'tracker_api_key': os.environ.get('TRACKER_API_KEY', '')
     }

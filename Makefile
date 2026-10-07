@@ -36,7 +36,15 @@ APP := nukedb_app
 SRC := src/nuke_flight.c src/server.c wasm/logistics_engine.c
 OBJ := $(patsubst %.c,build/%.o,$(SRC))
 
-.PHONY: all clean run sample-data wasm wasm_clean db-setup
+# WASI CLI (runs the same route kernel under wasmtime, for servers/CI/edge)
+WASI_SDK ?= $(HOME)/toolchains/wasi-sdk-25.0-x86_64-linux
+WASI_CC := $(WASI_SDK)/bin/clang
+WASI_TARGET_TRIPLE ?= wasm32-wasi
+WASI_MODULE := build/nukedb_wasi.wasm
+WASI_SRC := wasm/wasi_main.c wasm/nuke_kernel.c wasm/logistics_engine.c src/nuke_flight.c
+WASI_FLAGS := -std=c17 -O2 -Wall -Iinclude -Iwasm/wasi_shim -D__EMSCRIPTEN__ -D_WASI_EMULATED_GETPID
+
+.PHONY: all clean run sample-data wasm wasm_clean db-setup wasi wasi-test
 
 all: wasm
 
@@ -97,3 +105,14 @@ $(FK_TARGET): $(FK_SRC)
 
 wasm_clean:
 	rm -rf $(WASM_BUILD_DIR) $(WASM_DIST_DIR)
+
+$(WASI_MODULE): $(WASI_SRC)
+	@mkdir -p build
+	$(WASI_CC) --target=$(WASI_TARGET_TRIPLE) $(WASI_FLAGS) $(WASI_SRC) \
+		-Wl,-z,stack-size=1048576 -lwasi-emulated-getpid -o $@
+
+wasi: $(WASI_MODULE)
+
+wasi-test: $(WASI_MODULE)
+	wasmtime run --dir . $(WASI_MODULE) gc 37.46 126.44 50.03 8.56
+	wasmtime run --dir . $(WASI_MODULE) routes docs/wasm/nuke_blob.bin ICN FRA 2

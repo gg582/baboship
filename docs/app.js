@@ -122,7 +122,7 @@ const MapLayerStyle = {
   }
 };
 
-function getWasmUnavailableMessage(fallback = 'WASM 커널이 아직 초기화되지 않았습니다.') {
+function getWasmUnavailableMessage(fallback = '계산 엔진을 아직 준비하고 있습니다. 잠시 후 다시 시도해 주세요.') {
   return state.wasmUnavailableReason || fallback;
 }
 
@@ -1633,7 +1633,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Fallback to native server if WASM not available
         data = await fetchJsonOrError('./nodes?limit=8192'); // Assuming a /nodes endpoint
       } else {
-        throw new Error(getWasmUnavailableMessage('노드 엔진이 준비되지 않았습니다.'));
+        throw new Error(getWasmUnavailableMessage('경로 계산 준비 중입니다. 잠시 후 다시 시도해 주세요.'));
       }
 
       const nodes = Array.isArray(data.nodes) ? data.nodes
@@ -1709,7 +1709,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function applyWasmDisabledUi(messageOverride) {
     if (state.nativeMode) return;
-    const reason = messageOverride || getWasmUnavailableMessage('이 환경에서는 WASM 기능을 사용할 수 없습니다.');
+    const reason = messageOverride || getWasmUnavailableMessage('이 브라우저에서는 경로 계산을 지원하지 않습니다.');
     const controls = [
       searchBtn,
       trackingAnalyzeBtnIntl,
@@ -2443,7 +2443,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const parts = [
       `
       <div class="metric">
-        <span>경유 노드</span>
+        <span>거쳐간 지점</span>
         <strong>${result.nodes ?? '--'}</strong>
       </div>`,
       `
@@ -2453,22 +2453,22 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>`,
       `
       <div class="metric">
-        <span>실제 이동</span>
+        <span>실제 이동 거리</span>
         <strong>${result.traveledKm?.toFixed ? result.traveledKm.toFixed(1) + ' km' : '--'}</strong>
       </div>`,
       `
       <div class="metric">
-        <span>경로 페널티</span>
+        <span>돌아간 정도</span>
         <strong>${result.routePenalty !== undefined ? formatPercent(result.routePenalty) : '--'}</strong>
       </div>`,
       `
       <div class="metric">
-        <span>대기 페널티</span>
+        <span>머무른 시간</span>
         <strong>${result.dwellPenalty !== undefined ? formatPercent(result.dwellPenalty) : '--'}</strong>
       </div>`,
       `
       <div class="metric">
-        <span>EDI 스코어</span>
+        <span>경로 효율 점수</span>
         <strong>${result.idiotScore !== undefined ? result.idiotScore.toFixed(1) : '--'}</strong>
       </div>`
     ];
@@ -2494,7 +2494,7 @@ document.addEventListener('DOMContentLoaded', () => {
       </div>`);
       parts.push(`
       <div class="metric">
-        <span>추정 신뢰도</span>
+        <span>예상 정확도</span>
         <strong>${result.eta.confidence || '중간'}</strong>
         ${result.eta.transportMode ? `<small>${MODE_LABELS[result.eta.transportMode] || result.eta.transportMode} 기준</small>` : ''}
       </div>`);
@@ -2699,7 +2699,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const maxT = clampNumber(transfersRaw || 0, 0, 5);
     const maxResults = clampNumber(resultsRaw || 8, 1, 64);
     if (!state.kernel && !state.nativeMode) {
-      statusEl.textContent = getWasmUnavailableMessage('경로 엔진이 준비되지 않았습니다.');
+      statusEl.textContent = getWasmUnavailableMessage('경로 계산 준비 중입니다. 잠시 후 다시 시도해 주세요.');
       return;
     }
     statusEl.textContent = state.kernel ? 'WASM 분석 중...' : '서버 분석 중...';
@@ -3620,7 +3620,7 @@ async function computeBestDestinations(originCode, continentFilter) {
   if (state.nativeMode) {
     return computeBestDestinationsNative(originCode, continentFilter);
   }
-  throw new Error(getWasmUnavailableMessage('경로 엔진이 준비되지 않았습니다.'));
+  throw new Error(getWasmUnavailableMessage('경로 계산 준비 중입니다. 잠시 후 다시 시도해 주세요.'));
 }
 
 async function requestBestFrom() {

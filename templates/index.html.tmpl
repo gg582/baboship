@@ -4,6 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ app_name }}</title>
+    <meta name="description" content="송장 번호 하나로 국제 배송이 어디까지 왔는지, 며칠 안에 도착할지 계산해 주는 바보쉽. 공항·항구 경로 찾기도 됩니다.">
+    <meta property="og:title" content="바보쉽 - 누구나 알 수 있는 직구 택배 위치">
+    <meta property="og:description" content="송장 번호를 넣으면 배송 경로와 도착 예정일을 계산해 드립니다.">
+    <meta property="og:type" content="website">
+    <meta name="theme-color" content="#1d4ed8">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -19,14 +24,14 @@
     <div class="app-container">
         <header class="app-header">
             <div class="brand">
-                <strong>바보쉽 물류 콘솔</strong>
-                <p>우체국 송장 추적과 공항 경로 설계를 한 화면에서 전환하세요.</p>
+                <strong>바보쉽</strong>
+                <p>국제 배송, 지금 어디쯤 왔는지 궁금할 때. 송장 번호 하나면 됩니다.</p>
             </div>
             <div class="mode-tabs" role="tablist" aria-label="화물 분석 모드">
-                <button type="button" class="mode-tab active" data-mode-tab="tracking" role="tab" aria-controls="tracking-panel" aria-selected="true">EMS 경로 효율</button>
-                <button type="button" class="mode-tab" data-mode-tab="manual" role="tab" aria-controls="manual-panel" aria-selected="false">수동으로 공항 선택</button>
-                <button type="button" class="mode-tab mode-tab-beta" data-mode-tab="maritime" role="tab" aria-controls="maritime-panel" aria-selected="false" title="해운 경로는 실험적 기능입니다. 데이터 정확도가 항공 데이터보다 낮을 수 있습니다.">해운 경로 <span class="beta-badge">베타</span></button>
-                <button type="button" class="mode-tab" data-mode-tab="city" role="tab" aria-controls="city-panel" aria-selected="false">도시 간 거리</button>
+                <button type="button" class="mode-tab active" data-mode-tab="tracking" role="tab" aria-controls="tracking-panel" aria-selected="true">내 소포 어디까지 왔나</button>
+                <button type="button" class="mode-tab" data-mode-tab="manual" role="tab" aria-controls="manual-panel" aria-selected="false">공항끼리 경로 찾기</button>
+                <button type="button" class="mode-tab mode-tab-beta" data-mode-tab="maritime" role="tab" aria-controls="maritime-panel" aria-selected="false" title="아직 개발 중인 기능입니다. 항공 데이터보다 정확도가 낮을 수 있습니다.">배로 본 경로 <span class="beta-badge">베타</span></button>
+                <button type="button" class="mode-tab" data-mode-tab="city" role="tab" aria-controls="city-panel" aria-selected="false">두 도시 사이 거리</button>
             </div>
         </header>
 
@@ -34,25 +39,25 @@
             <div class="card tracking-card">
                 <div class="tracking-header">
                     <div>
-                        <h2>EMS 경로 효율 분석</h2>
-                        <p>송장 번호를 입력하면 한국 우체국 EMS 이벤트를 불러와 WebAssembly 엔진과 운송 휴리스틱으로 경로 효율과 예상 완료일을 계산합니다.</p>
+                        <h2>내 소포, 지금 어디쯤?</h2>
+                        <p>송장 번호만 넣으세요. 우체국 기록을 바탕으로 지금까지 온 길이 얼마나 비효율적이었는지, 며칠 안에 도착할지 계산해 드립니다.</p>
                     </div>
                     <div class="tracking-actions">
                         <label>
                             <span>송장번호</span>
                             <input type="text" id="tracking-number" placeholder="예: EG123456789KR" autocomplete="off">
                         </label>
-                        <button type="button" id="tracking-fetch-btn">우체국에서 불러오기</button>
+                        <button type="button" id="tracking-fetch-btn">조회하기</button>
                     </div>
                 </div>
                 <div class="tracking-body">
                     <label class="log-input">
-                        <span>이벤트 원문 (직접 붙여넣기 가능)</span>
-                        <textarea id="tracking-log-input" rows="5" placeholder="API 응답 JSON이나 텍스트 로그를 붙여넣으면 자동으로 분석됩니다."></textarea>
+                        <span>조회가 안 되면 우체국 문자나 이메일 내용을 그대로 붙여넣어 보세요</span>
+                        <textarea id="tracking-log-input" rows="5" placeholder="배송 조회 화면에서 본 내용을 복사해서 붙여넣으면 바로 분석됩니다."></textarea>
                     </label>
                     <div class="tracking-body-actions">
-                        <button type="button" id="tracking-analyze-btn">경로 분석</button>
-                        <div class="tracking-status" id="tracking-status">송장번호를 입력하거나 이벤트 문자열을 붙여넣으세요.</div>
+                        <button type="button" id="tracking-analyze-btn">분석하기</button>
+                        <div class="tracking-status" id="tracking-status">송장번호를 입력하거나 조회 내용을 붙여넣으세요.</div>
                     </div>
                 </div>
                 <div class="tracking-metrics" id="tracking-metrics">
@@ -71,15 +76,15 @@
                 <p>{{ hero_body }}</p>
             <div class="stat-grid">
                 <div class="stat">
-                    <div class="label">공항 수</div>
+                    <div class="label">세계 공항</div>
                     <div class="value" id="stat-airports">--</div>
                 </div>
                 <div class="stat">
-                    <div class="label">노선 수</div>
+                    <div class="label">분석 가능 노선</div>
                     <div class="value" id="stat-routes">--</div>
                 </div>
                 <div class="stat">
-                    <div class="label">처리 스레드</div>
+                    <div class="label">분석 엔진</div>
                     <div class="value" id="stat-workers">--</div>
                 </div>
             </div>
@@ -87,62 +92,62 @@
 
         <div class="grid">
             <section class="card controls-card">
-                <h2>항공 경로 탐색</h2>
-                <p>3자리 IATA 코드를 직접 입력하거나 지도에서 공항을 누르면 경로가 설정됩니다. 대륙별 법적 제한을 자동으로 제외합니다.</p>
+                <h2>항공 경로 찾기</h2>
+                <p>공항 코드(세 글자)를 입력하거나 지도에서 공항을 눌러 보세요. 규제로 막힌 노선은 자동으로 제외됩니다.</p>
                 <div class="form-grid">
                     <label>
-                        <span>출발 공항 (IATA)</span>
+                        <span>출발 공항 (예: ICN)</span>
                         <input type="text" maxlength="3" placeholder="예: ICN" id="from-code">
                     </label>
                     <label>
-                        <span>도착 공항 (IATA)</span>
+                        <span>도착 공항 (예: FRA)</span>
                         <input type="text" maxlength="3" placeholder="예: FRA" id="to-code">
                     </label>
                     <label>
-                        <span>최대 환승 횟수</span>
+                        <span>환승 가능 횟수</span>
                         <input type="number" min="0" max="3" value="2" id="max-transfers">
                     </label>
                     <label>
-                        <span>표시할 경로 수</span>
+                        <span>볼 경로 수</span>
                         <input type="number" min="1" max="64" value="8" id="max-results">
                     </label>
                 </div>
                 <div class="form-actions">
-                    <button class="ghost" type="button" id="swap-btn">출발/도착 맞바꾸기</button>
+                    <button class="ghost" type="button" id="swap-btn">출발·도착 바꾸기</button>
                 </div>
             </section>
 
             <section class="card map-card">
-                <h2>지도에서 선택</h2>
+                <h2>지도에서 고르기</h2>
                 <div class="map-mode">
-                    <button type="button" class="active" data-field="from">출발 공항 지정</button>
-                    <button type="button" data-field="to">도착 공항 지정</button>
+                    <button type="button" class="active" data-field="from">출발 고르기</button>
+                    <button type="button" data-field="to">도착 고르기</button>
                 </div>
                 <div id="map-wrapper">
                     <div id="map-container" class="map-canvas" role="application" aria-label="공항 경로 지도"></div>
-                    <div id="map-loader">공항 데이터를 불러오는 중...</div>
+                    <div id="map-loader">공항 정보를 불러오는 중입니다…</div>
                 </div>
                 <div class="selection-panel">
                     <div class="selection-pill">출발: <strong id="selection-from">--</strong></div>
                     <div class="selection-pill">도착: <strong id="selection-to">--</strong></div>
                 </div>
                 <div class="map-status" id="map-status">
-                    지도 위의 도시를 클릭하면 가장 가까운 공항을 자동으로 지정합니다. 위 버튼으로 편집할 공항을 선택하세요.
+                    지도를 누르면 가장 가까운 공항이 선택됩니다. 출발을 바꿀지 도착을 바꿀지는 위의 버튼으로 고르세요.
                 </div>
             </section>
         </div>
 
         <section class="card results-card">
             <div class="results-header">
-                <h2>노선 결과</h2>
-                <button type="button" id="search-btn">경로 계산</button>
+                <h2>찾은 경로</h2>
+                <button type="button" id="search-btn">경로 찾기</button>
             </div>
             <div id="route-results"></div>
         </section>
 
         <section class="card best-card" id="best-from-section">
             <div class="results-header">
-                <h2 id="best-from-title">출발 공항에서 최적 목적지</h2>
+                <h2 id="best-from-title">출발지에서 갈 만한 허브</h2>
                 <div class="best-controls">
                     <select id="best-from-continent">
                         <option value="">같은 대륙 (자동)</option>
@@ -154,15 +159,15 @@
                         <option value="중동">중동</option>
                         <option value="오세아니아">오세아니아</option>
                     </select>
-                    <button type="button" id="best-from-refresh-btn">최적 목적지 찾기</button>
+                    <button type="button" id="best-from-refresh-btn">추천 허브 보기</button>
                 </div>
             </div>
-            <div id="best-from-results"><div class="empty-state">아직 최적 경로를 검색하지 않았습니다. 버튼을 눌러서 검색하세요.</div></div>
+            <div id="best-from-results"><div class="empty-state">버튼을 누르면 추천 허브가 나타납니다.</div></div>
         </section>
 
         <section class="card best-card" id="best-to-section">
             <div class="results-header">
-                <h2 id="best-to-title">도착 공항에서 최적 목적지</h2>
+                <h2 id="best-to-title">도착지 근처에서 갈 만한 허브</h2>
                 <div class="best-controls">
                     <select id="best-to-continent">
                         <option value="">같은 대륙 (자동)</option>
@@ -174,10 +179,10 @@
                         <option value="중동">중동</option>
                         <option value="오세아니아">오세아니아</option>
                     </select>
-                    <button type="button" id="best-to-refresh-btn">최적 목적지 찾기</button>
+                    <button type="button" id="best-to-refresh-btn">추천 허브 보기</button>
                 </div>
             </div>
-            <div id="best-to-results"><div class="empty-state">아직 최적 경로를 검색하지 않았습니다. 버튼을 눌러서 검색하세요.</div></div>
+            <div id="best-to-results"><div class="empty-state">버튼을 누르면 추천 허브가 나타납니다.</div></div>
         </section>
         </main>
 
@@ -185,25 +190,25 @@
             <div class="card maritime-card">
                 <div class="tracking-header">
                     <div>
-                        <h2>해운 경로 탐색 <span class="beta-badge">베타</span></h2>
-                        <p>해운 레인 데이터를 기반으로 해상 운송 경로를 분석합니다. 선편 소포 송장을 입력하거나 노선을 직접 검색하세요.</p>
+                        <h2>배로 본 경로 찾기 <span class="beta-badge">베타</span></h2>
+                        <p>주요 항로를 바탕으로 선박 화물의 경로를 분석합니다. 우체국 선편소포 송장 번호를 입력하거나 항구를 직접 지정하세요.</p>
                         <ul class="beta-notes">
-                            <li>해운 데이터는 글로벌 주요 항로만 포함하며 정기선 시간표는 반영되지 않습니다.</li>
-                            <li>항구 코드(IATA 형식 아님)가 표시될 수 있으며, 정확한 항구명 매핑이 제한적입니다.</li>
-                            <li>해운 데이터베이스가 기본 활성화되어 총 375개 해상 노드 및 239개 해운 경로가 통합되었습니다.</li>
+                            <li>해운 자료는 주요 항로만 담고 있으며, 정기선 출발 시간표는 반영되지 않습니다.</li>
+                            <li>공항 코드와 다른 형식의 항구 코드가 표시될 수 있고, 항구 이름 변환이 정확하지 않을 수 있습니다.</li>
+                            <li>현재 해상 노드 375개, 해운 경로 239개가 들어 있습니다.</li>
                         </ul>
                     </div>
                 </div>
 
                 <details class="advanced-settings maritime-input-section" open>
-                    <summary>📦 선편 소포 · 해운 화물 추적</summary>
+                    <summary>📦 선편소포·선박 화물 조회</summary>
                     <div class="advanced-settings-body">
                         <div class="tracking-actions" style="flex-wrap:wrap;gap:0.75rem;align-items:flex-end;">
                             <label style="flex:1;min-width:220px;">
                                 <span>송장 / B/L 번호</span>
                                 <input type="text" id="maritime-tracking-number" placeholder="예: CP123456789KR 또는 B/L 번호" autocomplete="off" style="font-size:1rem;">
                             </label>
-                            <button type="button" id="maritime-fetch-btn">우체국에서 불러오기</button>
+                            <button type="button" id="maritime-fetch-btn">조회하기</button>
                         </div>
                         <div class="maritime-invoice-guide" style="margin-top:1rem;padding:0.9rem 1rem;background:var(--input-bg);border:1px solid var(--card-border);border-radius:6px;font-size:0.84rem;line-height:1.7;color:var(--muted);">
                             <strong style="color:var(--text);">송장 번호 형식 안내</strong>
@@ -233,7 +238,7 @@
                                     </tr>
                                 </tbody>
                             </table>
-                            <p style="margin-top:0.6rem;">💡 <strong>우체국 연동</strong>은 선편 소포(CP, CX, CC 등으로 시작하는 13자 UPU S10 번호)만 지원합니다. 컨테이너/B/L은 각 선사 홈페이지나 유니패스에서 확인하세요.</p>
+                            <p style="margin-top:0.6rem;">💡 <strong>우체국 조회</strong>는 선편소포(13자리 알파벳·숫자 조합, 예: CP·CX·CC로 시작)만 지원합니다. 컨테이너·B/L 번호는 각 선사 홈페이지나 관세청 유니패스에서 확인하세요.</p>
                         </div>
                         <div class="tracking-status" id="maritime-tracking-status" style="margin-top:0.75rem;">송장번호를 입력하고 조회하세요.</div>
                         <div class="tracking-timeline" id="maritime-tracking-timeline" style="margin-top:1rem;">
@@ -243,22 +248,22 @@
                 </details>
 
                 <details class="advanced-settings" style="margin-top:1rem;">
-                    <summary>🗺️ 해운 노선 직접 검색</summary>
+                    <summary>🗺️ 항구를 직접 지정해 경로 찾기</summary>
                     <div class="advanced-settings-body">
-                        <p style="font-size:0.875rem;color:var(--muted);margin-bottom:1rem;">해상 노드 코드를 직접 입력해 경로를 탐색합니다. 항공 경로 탐색과 동일하게 WASM 엔진을 사용합니다.</p>
+                        <p style="font-size:0.875rem;color:var(--muted);margin-bottom:1rem;">항구 코드를 입력하면 경로를 계산합니다. 항공 경로와 같은 방식으로 찾습니다.</p>
                         <div class="form-grid" style="gap:0.75rem;">
                             <label>
-                                <span>출발 항구 코드</span>
-                                <input type="text" maxlength="7" placeholder="예: SGSIN" id="maritime-from-code" style="text-transform:uppercase;">
+                                <span>출발 항구</span>
+                                <input type="text" maxlength="7" placeholder="예: SGSIN (싱가포르)" id="maritime-from-code" style="text-transform:uppercase;">
                             </label>
                             <label>
-                                <span>도착 항구 코드</span>
-                                <input type="text" maxlength="7" placeholder="예: JPTYO" id="maritime-to-code" style="text-transform:uppercase;">
+                                <span>도착 항구</span>
+                                <input type="text" maxlength="7" placeholder="예: JPTYO (도쿄)" id="maritime-to-code" style="text-transform:uppercase;">
                             </label>
                         </div>
-                        <button type="button" id="maritime-search-btn" style="margin-top:0.75rem;">해운 경로 탐색</button>
+                        <button type="button" id="maritime-search-btn" style="margin-top:0.75rem;">경로 찾기</button>
                         <div class="tracking-status" id="maritime-route-status" style="margin-top:0.75rem;"></div>
-                        <div id="maritime-route-results" style="margin-top:1rem;"><div class="empty-state">경로 탐색 결과가 여기에 표시됩니다.</div></div>
+                        <div id="maritime-route-results" style="margin-top:1rem;"><div class="empty-state">결과가 여기에 표시됩니다.</div></div>
                     </div>
                 </details>
             </div>
@@ -268,27 +273,27 @@
             <div class="card city-card">
                 <div class="tracking-header">
                     <div>
-                        <h2>도시 간 거리 측정</h2>
-                        <p>전 세계 도시 이름을 입력하면 대원 거리와 예상 비행 시간, 각 도시에서 가장 가까운 항공 물류 허브를 계산합니다.</p>
+                        <h2>두 도시 사이, 얼마나 걸릴까?</h2>
+                        <p>세계 주요 도시 이름을 입력하면 직선 거리와 비행 소요 시간, 각 도시에서 가장 가까운 항공 허브를 알려 드립니다.</p>
                     </div>
                 </div>
                 <div class="form-grid">
                     <label>
                         <span>출발 도시</span>
-                        <input type="text" id="city-from" list="city-suggestions" placeholder="예: Daegu" autocomplete="off">
+                        <input type="text" id="city-from" list="city-suggestions" placeholder="예: Daegu (대구)" autocomplete="off">
                     </label>
                     <label>
                         <span>도착 도시</span>
-                        <input type="text" id="city-to" list="city-suggestions" placeholder="예: Incheon" autocomplete="off">
+                        <input type="text" id="city-to" list="city-suggestions" placeholder="예: Incheon (인천)" autocomplete="off">
                     </label>
                     <label>
-                        <span>이동 완료 거리 (km, 선택)</span>
+                        <span>이미 온 거리 (km, 선택 사항)</span>
                         <input type="number" min="0" step="any" id="city-traveled" placeholder="예: 100" autocomplete="off">
                     </label>
                 </div>
                 <datalist id="city-suggestions"></datalist>
                 <div class="form-actions">
-                    <button type="button" id="city-compute-btn">거리 계산</button>
+                    <button type="button" id="city-compute-btn">계산하기</button>
                 </div>
                 <div class="tracking-status" id="city-status">도시 이름을 입력하고 계산 버튼을 누르세요.</div>
                 <div class="tracking-metrics" id="city-results">
