@@ -59,6 +59,12 @@
                             <span>송장번호</span>
                             <input type="text" id="tracking-number" placeholder="예: EG123456789KR" autocomplete="off">
                         </label>
+                        <label>
+                            <span>받는 도시</span>
+                            <input type="text" id="tracking-destination-city" list="tracking-city-suggestions" placeholder="예: Seoul" autocomplete="off" value="Seoul">
+                            <input type="hidden" id="tracking-destination-iso" value="KR">
+                        </label>
+                        <datalist id="tracking-city-suggestions"></datalist>
                         <button type="button" id="tracking-fetch-btn">조회하기</button>
                     </div>
                 </div>

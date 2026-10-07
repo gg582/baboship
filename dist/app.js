@@ -18,6 +18,7 @@ const state = {
   nativeDirectCache: new Map(),
   trackingRouteHintIntl: null,
   trackingUserDestIso: 'KR',
+  trackingUserDestCity: { name: 'Seoul', iso: 'KR', lat: 37.5665, lon: 126.9780 },
   hasTouch: false
 };
 
@@ -2015,8 +2016,40 @@ document.addEventListener('DOMContentLoaded', () => {
   function resolveDestinationHub(events, lastEvent, userIso = null) {
     // User-specified destination takes priority
     if (userIso) {
-      const userHub = resolveCountryHubNode(userIso.toUpperCase());
+      const normalizedIso = userIso.toUpperCase();
+      // Prefer the user's chosen city: nearest air hub to the city coordinates.
+      const userCity = state.trackingUserDestCity;
+      if (userCity && Number.isFinite(userCity.lat) && Number.isFinite(userCity.lon) &&
+          (userCity.iso || '').toUpperCase() === normalizedIso && state.nodes.length) {
+        const nearest = nearestAirHub(userCity.lat, userCity.lon);
+        if (nearest) {
+          return {
+            code: nearest.node.code,
+            lat: nearest.node.lat,
+            lon: nearest.node.lon,
+            layer: nearest.node.layer || 'air',
+            iso: normalizedIso
+          };
+        }
+      }
+      const userHub = COUNTRY_HUBS[normalizedIso]
+        ? resolveCountryHubNode(normalizedIso)
+        : null;
       if (userHub) return userHub;
+      // Country not in the hub table: use any air node in that country.
+      if (state.nodes.length) {
+        const inCountry = state.nodes.find((n) =>
+          (n.country || '').toUpperCase() === normalizedIso && (n.layer || 'air') === 'air');
+        if (inCountry) {
+          return {
+            code: inCountry.code,
+            lat: inCountry.lat,
+            lon: inCountry.lon,
+            layer: inCountry.layer || 'air',
+            iso: normalizedIso
+          };
+        }
+      }
     }
     const isoCounts = new Map();
     for (const evt of events || []) {
@@ -3056,6 +3089,37 @@ document.addEventListener('DOMContentLoaded', () => {
         runTrackingAnalysisIntl(trackingLogInputIntl.value).catch(err => console.error(err));
       }
     });
+  }
+  // Destination city picker: free-text over the cities DB, resolves to ISO code
+  const trackingDestCityInput = document.getElementById('tracking-destination-city');
+  const trackingDestCityDatalist = document.getElementById('tracking-city-suggestions');
+  if (trackingDestCityInput && trackingDestinationSelect) {
+    const refreshDestCityDatalist = (query) => {
+      if (!trackingDestCityDatalist) return;
+      const rows = searchCityRows(query || '', 20);
+      trackingDestCityDatalist.innerHTML = rows.map((row) => {
+        const label = `${row[0]}, ${row[2]}`;
+        return `<option value="${escapeHtml(row[0])}" label="${escapeHtml(label)}">${escapeHtml(label)}</option>`;
+      }).join('');
+    };
+    trackingDestCityInput.addEventListener('focus', () => {
+      loadCityData().then(() => refreshDestCityDatalist(trackingDestCityInput.value)).catch(() => {});
+    });
+    trackingDestCityInput.addEventListener('input', () => {
+      loadCityData().then(() => refreshDestCityDatalist(trackingDestCityInput.value)).catch(() => {});
+    });
+    const applyDestCity = () => {
+      const row = resolveCityRow(trackingDestCityInput.value);
+      if (row && row[2]) {
+        trackingDestinationSelect.value = row[2];
+        state.trackingUserDestIso = row[2];
+        state.trackingUserDestCity = { name: row[0], iso: row[2], lat: row[3], lon: row[4] };
+        if (state.trackingEventsIntl.length && trackingLogInputIntl) {
+          runTrackingAnalysisIntl(trackingLogInputIntl.value).catch(err => console.error(err));
+        }
+      }
+    };
+    trackingDestCityInput.addEventListener('change', applyDestCity);
   }
   if (trackingNumberInputIntl) {
     trackingNumberInputIntl.addEventListener('keydown', (e) => {
